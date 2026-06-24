@@ -58,7 +58,7 @@
   .maptip{position:absolute;pointer-events:none;background:#0c1217;border:1px solid var(--line2);font-family:var(--mono);font-size:10px;padding:5px 8px;color:var(--text);opacity:0;transform:translate(-50%,-130%);white-space:nowrap;z-index:5}
   .legend{position:absolute;left:12px;bottom:12px;font-family:var(--mono);font-size:9px;color:var(--muted);background:rgba(6,9,13,.7);border:1px solid var(--line);padding:8px 10px;line-height:1.7}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
-  .results{height:266px;flex:none;border-top:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .results{flex:1;min-height:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
   .results .hd{display:flex;align-items:center;padding:9px 14px;border-bottom:1px solid var(--line)}
   .results .hd b{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
   table{width:100%;border-collapse:collapse;font-size:12px}
@@ -92,7 +92,7 @@
     <div class="brand"><span class="diamond"></span>PI <b>Planner</b></div>
     <div class="sp"></div>
     <div id="auth" class="autharea"></div>
-    <button class="btn ghost" id="setBtn">Setup</button>
+    <button class="btn ghost" id="setBtn">⚏ Scale</button>
   </div>
   <div class="main">
     <div class="side">
@@ -125,12 +125,14 @@
 </div>
 
 <div class="modal" id="setModal"><div class="box">
-  <h2>Setup</h2>
-  <p class="hint">EVE SSO is used to read your existing colonies (<span class="mono">esi-planets.manage_planets.v1</span>). Register an app at <a href="https://developers.eveonline.com" target="_blank">developers.eveonline.com</a> with this callback and paste the Client ID:</p>
-  <label style="margin-top:12px">Callback URL (embedded)</label><input id="cfgRedir" readonly>
-  <label style="margin-top:10px">EVE Client ID</label><input id="cfgClient" placeholder="paste your client ID">
-  <label style="margin-top:10px">UI scale (%)</label><input id="cfgUi" type="number" min="50" max="500" step="10" placeholder="300">
-  <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" id="cfgSave">Save</button><button class="btn ghost" id="cfgClose">Close</button></div>
+  <h2>UI Scale</h2>
+  <p class="hint">Resize the entire interface. Changes apply instantly and are remembered on this device.</p>
+  <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
+    <input id="cfgUiRange" type="range" min="60" max="400" step="10" style="flex:1">
+    <input id="cfgUi" type="number" min="60" max="400" step="10" style="width:96px">
+    <span class="mono">%</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:18px"><button class="btn" id="cfgClose">Done</button></div>
 </div></div>
 
 <!-- DATA -->
@@ -140,7 +142,7 @@ const PI={"names":{"44":"Enriched Uranium","2073":"Microorganisms","2267":"Base 
 const $=id=>document.getElementById(id);
 // ---------- config (fresh, embedded; editable in Setup) ----------
 const APP={ clientId:'2f5f375112e64848ab34261092e6a756', redirect:'https://novadragon22.github.io/PI-Planner/' };
-const cfg=JSON.parse(localStorage.getItem('pi_cfg')||'{}'); if(cfg.clientId) APP.clientId=cfg.clientId;
+const cfg=JSON.parse(localStorage.getItem('pi_cfg')||'{}');   // stores UI scale only
 const SCOPES='publicData esi-planets.manage_planets.v1 esi-location.read_location.v1 esi-skills.read_skills.v1';
 
 const SYS=UNIVERSE.systems, REG=UNIVERSE.regions, PTN=UNIVERSE.planetTypes;
@@ -281,9 +283,10 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   let html=`<div style="padding:6px 14px 2px" class="hint">
     Planets available to you: <b style="color:var(--gold-bright)">${plan.maxPlanets}</b> (Interplanetary Consolidation ${plan.ic}) ·
     command-center budget <b>CPU ${plan.cpuB} / PG ${plan.pgB}</b> (Command Center Upgrades ${plan.ccu})
-    ${loggedIn?'· from your skills':'· assumed — log in to use your real skills, or set below'}
-    <span style="float:right">IC <select id="icSel">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ic?'selected':''}>${l}</option>`).join('')}</select>
-      CCU <select id="ccuSel">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ccu?'selected':''}>${l}</option>`).join('')}</select></span></div>
+    ${loggedIn?'· from your skills':'· assumed — adjust below'}</div>
+    <div style="padding:0 14px 6px;display:flex;gap:16px;align-items:center" class="hint">
+      <span style="display:flex;align-items:center;gap:6px">Interplanetary&nbsp;Consolidation <select id="icSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ic?'selected':''}>${l}</option>`).join('')}</select></span>
+      <span style="display:flex;align-items:center;gap:6px">Command&nbsp;Center&nbsp;Upgrades <select id="ccuSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ccu?'selected':''}>${l}</option>`).join('')}</select></span></div>
     <div class="hint" style="padding:0 14px 4px">Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of your ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; split across alts or import some inputs`:''}.</div>`;
   plan.ext.forEach((e,i)=>{ const fac=`Extractor Control Unit · ${e.heads} heads → extract <b>${PI.names[e.p0]}</b><br>${e.basics}× Basic Industry Facility → <b>${e.p1?PI.recipe[e.p1].name:'P1'}</b><br>1× Launchpad`;
     html+=card(`Planet ${i+1} · ${PNAME2[e.code]}`, 'Extraction + P1', fac, e.cpu, e.pg, e.cpuB, e.pgB); });
@@ -361,7 +364,7 @@ async function sha256(s){return crypto.subtle.digest('SHA-256',new TextEncoder()
 function rnd(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return b64url(a.buffer);}
 function jwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return{};}}
 const saveChars=()=>localStorage.setItem('pi_chars',JSON.stringify(chars));
-async function login(){ if(!APP.clientId){ openSetup(); return; }
+async function login(){ if(!APP.clientId){ alert('Sign-in unavailable — no client ID is configured.'); return; }
   const v=rnd(32);sessionStorage.setItem('pi_pkce',v);const c=b64url(await sha256(v));
   const u=new URL('https://login.eveonline.com/v2/oauth/authorize');
   u.search=new URLSearchParams({response_type:'code',redirect_uri:APP.redirect,client_id:APP.clientId,scope:SCOPES,code_challenge:c,code_challenge_method:'S256',state:rnd(8)}).toString();
@@ -398,10 +401,11 @@ function renderAuth(){ const a=$('auth'); const ids=Object.keys(chars).map(Numbe
 function applyUi(pct){ const v=Math.max(50,Math.min(500,+pct||300))/100; document.documentElement.style.setProperty('--ui',v);
   cfg.ui=Math.round(v*100); localStorage.setItem('pi_cfg',JSON.stringify(cfg)); if(typeof resize==='function') requestAnimationFrame(resize); }
 if(cfg.ui) applyUi(cfg.ui);
-// ---------- setup modal ----------
-function openSetup(){ $('cfgRedir').value=APP.redirect; $('cfgClient').value=APP.clientId; $('cfgUi').value=cfg.ui||300; $('setModal').classList.add('show'); }
+// ---------- scale modal (scale only; credentials are embedded and never shown) ----------
+function openSetup(){ const v=cfg.ui||300; $('cfgUi').value=v; $('cfgUiRange').value=v; $('setModal').classList.add('show'); }
 $('setBtn').onclick=openSetup; $('cfgClose').onclick=()=>$('setModal').classList.remove('show');
-$('cfgSave').onclick=()=>{ APP.clientId=$('cfgClient').value.trim(); cfg.clientId=APP.clientId; localStorage.setItem('pi_cfg',JSON.stringify(cfg)); applyUi($('cfgUi').value); $('setModal').classList.remove('show'); };
+$('cfgUi').oninput=()=>{ $('cfgUiRange').value=$('cfgUi').value; applyUi($('cfgUi').value); };
+$('cfgUiRange').oninput=()=>{ $('cfgUi').value=$('cfgUiRange').value; applyUi($('cfgUiRange').value); };
 
 // ---------- boot ----------
 setupBounds(); resize(); addEventListener('resize',resize);
