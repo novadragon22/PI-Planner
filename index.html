@@ -9,13 +9,16 @@
   :root{--bg:#030507;--panel:#0a0d10;--line:#1a2028;--line2:#2a4050;
     --gold:#c9a868;--gold-bright:#e8d296;--gold-dim:#8a7048;--cyan:#7ab8c8;--cyan-bright:#a0d0e0;
     --green:#8cc86a;--red:#d66a5a;--amber:#d8a24a;--text:#c9d4db;--muted:#7a8fa0;--muted2:#5a6b78;
-    --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;}
+    --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;--ui:3;}
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px}
+  html{height:100%}
+  /* zoom scales the whole UI 3x; width/height are pre-divided by --ui so the scaled app still fills the viewport */
+  body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;
+    zoom:var(--ui);width:calc(100vw / var(--ui));height:calc(100vh / var(--ui))}
   ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:#05080b}::-webkit-scrollbar-thumb{background:#1c2731;border:1px solid #243441}
   .diamond{width:7px;height:7px;background:var(--gold);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:inline-block;margin-right:8px;vertical-align:middle}
   .mono{font-family:var(--mono)}
-  .app{display:flex;flex-direction:column;height:100vh}
+  .app{display:flex;flex-direction:column;height:100%;width:100%}
   .topbar{display:flex;align-items:center;gap:16px;padding:11px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#080b0e,#06090c)}
   .brand{font-family:var(--mono);font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold-bright);white-space:nowrap}
   .brand b{color:var(--gold)}
@@ -45,8 +48,13 @@
   .req{padding:10px 14px}
   .ptpill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;margin:3px 4px 0 0;padding:3px 7px;border:1px solid var(--line2)}
   .center{flex:1;display:flex;flex-direction:column;min-height:0}
-  .mapwrap{flex:1;position:relative;min-height:0;background:radial-gradient(900px 500px at 50% 40%,#06090d,#030506)}
-  #map{position:absolute;inset:0;width:100%;height:100%}
+  .mapwrap{flex:none;height:40%;min-height:0;position:relative;background:radial-gradient(700px 400px at 50% 50%,#06090d,#030506);border-bottom:1px solid var(--line)}
+  #map{position:absolute;inset:0;width:100%;height:100%;cursor:grab}
+  #map:active{cursor:grabbing}
+  .zoomctl{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;gap:5px;z-index:6}
+  .zoomctl button{width:28px;height:28px;border:1px solid var(--line2);background:rgba(6,9,13,.8);color:var(--gold);font-family:var(--mono);font-size:15px;cursor:pointer;line-height:1}
+  .zoomctl button:hover{border-color:var(--gold-dim);color:var(--gold-bright)}
+  .results{flex:1;min-height:0;display:flex;flex-direction:column}
   .maptip{position:absolute;pointer-events:none;background:#0c1217;border:1px solid var(--line2);font-family:var(--mono);font-size:10px;padding:5px 8px;color:var(--text);opacity:0;transform:translate(-50%,-130%);white-space:nowrap;z-index:5}
   .legend{position:absolute;left:12px;bottom:12px;font-family:var(--mono);font-size:9px;color:var(--muted);background:rgba(6,9,13,.7);border:1px solid var(--line);padding:8px 10px;line-height:1.7}
   .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
@@ -106,6 +114,7 @@
     </div>
     <div class="center">
       <div class="mapwrap"><canvas id="map"></canvas><div class="maptip" id="tip"></div>
+        <div class="zoomctl"><button id="zin">+</button><button id="zout">−</button><button id="zreset" title="reset view">⟲</button></div>
         <div class="legend" id="legend"></div></div>
       <div class="results">
         <div class="hd"><b id="resHd">Candidate systems</b><span class="sp"></span><span id="closest" class="mono" style="font-size:11px;cursor:pointer;color:var(--cyan-bright)"></span></div>
@@ -120,6 +129,7 @@
   <p class="hint">EVE SSO is used to read your existing colonies (<span class="mono">esi-planets.manage_planets.v1</span>). Register an app at <a href="https://developers.eveonline.com" target="_blank">developers.eveonline.com</a> with this callback and paste the Client ID:</p>
   <label style="margin-top:12px">Callback URL (embedded)</label><input id="cfgRedir" readonly>
   <label style="margin-top:10px">EVE Client ID</label><input id="cfgClient" placeholder="paste your client ID">
+  <label style="margin-top:10px">UI scale (%)</label><input id="cfgUi" type="number" min="50" max="500" step="10" placeholder="300">
   <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" id="cfgSave">Save</button><button class="btn ghost" id="cfgClose">Close</button></div>
 </div></div>
 
@@ -290,38 +300,49 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
 
 // ---------- canvas starmap ----------
 const cv=$('map'), tip=$('tip'); let ctx, W,H, bounds=null, pts=[];
+let zoom=1, panx=0, pany=0;
 function setupBounds(){ let minx=1e30,maxx=-1e30,miny=1e30,maxy=-1e30;
   sysIds.forEach(id=>{ const x=SYS[id][3], y=SYS[id][4]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; });
-  bounds={minx,maxx,miny,maxy}; }
+  bounds={minx,maxx,miny,maxy,cx:(minx+maxx)/2,cy:(miny+maxy)/2}; }
+function fitScale(){ const pad=24; return Math.min((W-2*pad)/(bounds.maxx-bounds.minx),(H-2*pad)/(bounds.maxy-bounds.miny)); }
 function resize(){ const r=cv.parentElement.getBoundingClientRect(); cv.width=r.width*devicePixelRatio; cv.height=r.height*devicePixelRatio;
   ctx=cv.getContext('2d'); ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); W=r.width; H=r.height; drawMap(); }
-function proj(x,y){ const pad=26; const bx=(x-bounds.minx)/(bounds.maxx-bounds.minx); const by=(y-bounds.miny)/(bounds.maxy-bounds.miny);
-  return [pad+bx*(W-2*pad), H-pad-by*(H-2*pad)]; }
+// uniform scale on both axes (aspect-correct) + centered + zoom/pan -> symmetrical galaxy
+function proj(x,y){ const k=fitScale()*zoom; return [ W/2+(x-bounds.cx)*k+panx, H/2-(y-bounds.cy)*k+pany ]; }
 function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
   const resSet=new Set(results.map(r=>r.id)); const fullSet=new Set(results.filter(r=>r.covered===r.total).map(r=>r.id));
-  // base systems
   for(const id of sysIds){ const s=SYS[id]; const [px,py]=proj(s[3],s[4]);
+    if(px<-20||px>W+20||py<-20||py>H+20) continue;            // cull offscreen when zoomed
     let c='#1b2630', rad=0.7;
     if(resSet.has(id)){ c=fullSet.has(id)?'#e8d296':'#8a7048'; rad=fullSet.has(id)?2.1:1.4; }
     ctx.fillStyle=c; ctx.beginPath(); ctx.arc(px,py,rad,0,7); ctx.fill();
     if(resSet.has(id)) pts.push([px,py,id]); }
-  // colonies (green)
   Object.values(colonies).flat().forEach(co=>{ const s=SYS[co.system]; if(!s)return; const [px,py]=proj(s[3],s[4]);
     ctx.strokeStyle='#8cc86a'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.arc(px,py,3.4,0,7); ctx.stroke(); });
-  // home (cyan)
   if(homeId&&SYS[homeId]){ const [px,py]=proj(SYS[homeId][3],SYS[homeId][4]); ctx.strokeStyle='#a0d0e0';ctx.lineWidth=1.6;
     ctx.beginPath(); ctx.arc(px,py,5,0,7); ctx.stroke(); ctx.fillStyle='#a0d0e0'; ctx.fillRect(px-1,py-1,2,2); }
   if(chosen&&SYS[chosen]){ const [px,py]=proj(SYS[chosen][3],SYS[chosen][4]); ctx.strokeStyle='#e8d296';ctx.lineWidth=1.6;
     ctx.beginPath(); ctx.arc(px,py,6,0,7); ctx.stroke(); }
   $('legend').innerHTML=`<div><i style="background:#e8d296"></i>full-chain system</div><div><i style="background:#8a7048"></i>partial</div>
     <div><i style="background:#8cc86a"></i>your colony</div><div><i style="background:#a0d0e0"></i>home</div>
-    <div style="margin-top:4px;color:var(--muted2)">${sysIds.length} systems</div>`; }
-cv.addEventListener('mousemove',e=>{ if(!pts.length){tip.style.opacity=0;return;} const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
-  let best=null,bd=64; for(const [px,py,id] of pts){ const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best=id;} }
-  if(best!=null){ const s=SYS[best]; tip.style.left=proj(s[3],s[4])[0]+'px'; tip.style.top=proj(s[3],s[4])[1]+'px';
-    tip.innerHTML=`${s[0]} · ${REG[s[2]]} · ${s[1].toFixed(1)}`; tip.style.opacity=1; } else tip.style.opacity=0; });
-cv.addEventListener('click',e=>{ if(!pts.length)return; const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
-  let best=null,bd=80; for(const [px,py,id] of pts){ const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best=id;} } if(best!=null){ selectSystem(best); } });
+    <div style="margin-top:4px;color:var(--muted2)">${sysIds.length} systems · ${zoom.toFixed(1)}×</div>`; }
+function setZoom(f,ax,ay){ const Cx=ax==null?W/2:ax, Cy=ay==null?H/2:ay;
+  const nz=Math.max(0.5,Math.min(40,zoom*f)); const g=nz/zoom;
+  panx = Cx - (Cx - panx)*g; pany = Cy - (Cy - pany)*g; zoom=nz; drawMap(); }
+$('zin').onclick=()=>setZoom(1.4); $('zout').onclick=()=>setZoom(1/1.4);
+$('zreset').onclick=()=>{ zoom=1; panx=0; pany=0; drawMap(); };
+cv.addEventListener('wheel',e=>{ e.preventDefault(); const r=cv.getBoundingClientRect();
+  setZoom(e.deltaY<0?1.12:1/1.12, e.clientX-r.left, e.clientY-r.top); },{passive:false});
+// drag to pan, click (no drag) to select
+let dn=false,dragged=false,lx=0,ly=0;
+cv.addEventListener('pointerdown',e=>{ dn=true;dragged=false;lx=e.clientX;ly=e.clientY;cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove',e=>{ const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
+  if(dn){ const dx=e.clientX-lx,dy=e.clientY-ly; if(Math.abs(dx)+Math.abs(dy)>3)dragged=true; panx+=dx;pany+=dy;lx=e.clientX;ly=e.clientY; drawMap(); tip.style.opacity=0; return; }
+  if(!pts.length){tip.style.opacity=0;return;} let best=null,bd=64; for(const [px,py,id] of pts){ const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best=id;} }
+  if(best!=null){ const [bx,by]=proj(SYS[best][3],SYS[best][4]); tip.style.left=bx+'px'; tip.style.top=by+'px';
+    tip.innerHTML=`${SYS[best][0]} · ${REG[SYS[best][2]]} · ${SYS[best][1].toFixed(1)}`; tip.style.opacity=1; } else tip.style.opacity=0; });
+cv.addEventListener('pointerup',e=>{ dn=false; if(dragged||!pts.length)return; const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
+  let best=null,bd=90; for(const [px,py,id] of pts){ const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best=id;} } if(best!=null) selectSystem(best); });
 function flashSystem(id){ chosen=id; drawMap(); }
 async function loadSkills(id){ try{ const sk=await eGet(id,`/characters/${id}/skills/`);
     (sk.skills||[]).forEach(s=>{ skillMap[s.skill_id]=Math.max(skillMap[s.skill_id]||0,s.trained_skill_level); });
@@ -373,10 +394,14 @@ function renderAuth(){ const a=$('auth'); const ids=Object.keys(chars).map(Numbe
   a.querySelectorAll('[data-rm]').forEach(x=>x.onclick=e=>{e.stopPropagation();logout(+x.dataset.rm);});
   $('eAdd').onclick=login; $('eOut').onclick=()=>{ chars={};colonies={};saveChars();renderAuth();drawMap(); }; }
 
+// ---------- UI scale ----------
+function applyUi(pct){ const v=Math.max(50,Math.min(500,+pct||300))/100; document.documentElement.style.setProperty('--ui',v);
+  cfg.ui=Math.round(v*100); localStorage.setItem('pi_cfg',JSON.stringify(cfg)); if(typeof resize==='function') requestAnimationFrame(resize); }
+if(cfg.ui) applyUi(cfg.ui);
 // ---------- setup modal ----------
-function openSetup(){ $('cfgRedir').value=APP.redirect; $('cfgClient').value=APP.clientId; $('setModal').classList.add('show'); }
+function openSetup(){ $('cfgRedir').value=APP.redirect; $('cfgClient').value=APP.clientId; $('cfgUi').value=cfg.ui||300; $('setModal').classList.add('show'); }
 $('setBtn').onclick=openSetup; $('cfgClose').onclick=()=>$('setModal').classList.remove('show');
-$('cfgSave').onclick=()=>{ APP.clientId=$('cfgClient').value.trim(); cfg.clientId=APP.clientId; localStorage.setItem('pi_cfg',JSON.stringify(cfg)); $('setModal').classList.remove('show'); };
+$('cfgSave').onclick=()=>{ APP.clientId=$('cfgClient').value.trim(); cfg.clientId=APP.clientId; localStorage.setItem('pi_cfg',JSON.stringify(cfg)); applyUi($('cfgUi').value); $('setModal').classList.remove('show'); };
 
 // ---------- boot ----------
 setupBounds(); resize(); addEventListener('resize',resize);
