@@ -34,6 +34,8 @@
   .tier{font-family:var(--mono);font-size:10px;padding:5px 10px;border:1px solid var(--line2);color:var(--muted);cursor:pointer}
   .tier.on{color:var(--gold-bright);border-color:var(--gold-dim);background:rgba(201,168,104,.1)}
   .prod{display:flex;align-items:center;gap:9px;padding:7px 14px;border-bottom:1px solid #0e141a;cursor:pointer}
+  .prod input.psel{flex:none;width:13px;height:13px;accent-color:var(--gold);cursor:pointer;margin:0}
+  .prod.sel{box-shadow:inset 3px 0 0 var(--gold)}
   .prod:hover{background:rgba(201,168,104,.06)} .prod.on{background:rgba(122,184,200,.1)}
   .prod img{width:26px;height:26px;border:1px solid var(--line);background:#05080b}
   .prod .nm{flex:1;font-size:12.5px}
@@ -264,27 +266,42 @@ let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; l
 function buildTiers(){ $('tiers').innerHTML=[1,2,3,4].map(t=>`<span class="tier ${t===tier?'on':''}" data-t="${t}">P${t}</span>`).join('');
   $('tiers').querySelectorAll('.tier').forEach(x=>x.onclick=()=>{ tier=+x.dataset.t; buildTiers(); buildProducts(); }); }
 function buildProducts(){ const ids=Object.keys(PI.recipe).filter(o=>PI.tier[o]===tier).sort((a,b)=>PI.recipe[a].name.localeCompare(PI.recipe[b].name));
-  $('prodList').innerHTML=ids.map(o=>`<div class="prod ${target==o?'on':''}" data-o="${o}">
+  $('prodList').innerHTML=ids.map(o=>`<div class="prod ${target==o?'on':''} ${sel[o]!=null?'sel':''}" data-o="${o}">
+    <input type="checkbox" class="psel" data-o="${o}" ${sel[o]!=null?'checked':''} onclick="event.stopPropagation()">
     <img loading="lazy" src="https://images.evetech.net/types/${o}/icon?size=64" onerror="this.style.visibility='hidden'">
     <span class="nm">${PI.recipe[o].name}</span><span class="tg">P${PI.tier[o]}</span></div>`).join('');
-  $('prodList').querySelectorAll('.prod').forEach(d=>d.onclick=()=>selectTarget(d.dataset.o)); }
+  $('prodList').querySelectorAll('.psel').forEach(c=>c.onchange=()=>toggleProduct(c.dataset.o));
+  $('prodList').querySelectorAll('.prod').forEach(d=>d.onclick=()=>focusProduct(d.dataset.o)); }
 
-function selectTarget(o){ target=o; buildProducts(); renderReq(); compute(); loadHubPrices(); fitSide(); }
+function toggleProduct(o){ o=String(o);
+  if(sel[o]!=null){ delete sel[o]; if(target==o){ const k=Object.keys(sel); target=k.length?k[0]:null; } }
+  else { sel[o]=lastQty; target=o; }
+  saveSel(); buildProducts(); renderReq(); compute(); loadHubPrices(); fitSide(); }
+function focusProduct(o){ o=String(o); if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o;
+  buildProducts(); renderReq(); compute(); loadHubPrices(); fitSide(); }
 // size the two top sections so the open one(s) fill the space and scroll internally (Target product gets the slack when both are open)
 function fitSide(){ try{
   const top=document.querySelector('.sidetop'); const dProd=$('dProd'), dMkt=$('dMkt'); if(!top||!dProd||!dMkt) return;
   const list=$('prodList'); const mreq=dMkt.querySelector('.req');
-  if(list) list.style.maxHeight=''; if(mreq) mreq.style.maxHeight='';
+  if(list) list.style.maxHeight=''; if(mreq){ mreq.style.maxHeight=''; mreq.style.minHeight=''; }
   const H=top.clientHeight; if(!H) return;
   const sumP=dProd.querySelector('summary').offsetHeight, sumM=dMkt.querySelector('summary').offsetHeight;
   const tiers=$('tiers'); const tiersH=(dProd.open&&tiers)?tiers.offsetHeight:0;
   const pOpen=dProd.open, mOpen=dMkt.open;
   if(pOpen&&!mOpen){ if(list) list.style.maxHeight=Math.max(60,H-sumP-tiersH-sumM)+'px'; }
-  else if(!pOpen&&mOpen){ if(mreq) mreq.style.maxHeight=Math.max(60,H-sumP-sumM)+'px'; }
-  else if(pOpen&&mOpen){ const avail=H-sumP-tiersH-sumM; const nat=mreq?mreq.scrollHeight:0;
-    let pMax=avail-nat;
-    if(pMax<140){ pMax=Math.max(100,Math.round(avail*0.55)); if(mreq) mreq.style.maxHeight=Math.max(60,avail-pMax)+'px'; }
-    if(list) list.style.maxHeight=Math.max(100,pMax)+'px'; }
+  else if(!pOpen&&mOpen){ if(mreq){ const hh=Math.max(60,H-sumP-sumM); mreq.style.maxHeight=hh+'px'; mreq.style.minHeight=hh+'px'; } }
+  else if(pOpen&&mOpen){ const avail=H-sumP-tiersH-sumM;
+    const p4=Object.keys(sel).some(o=>PI.tier[o]==4);
+    if(p4){ // P4 chains have a big shopping list — give Market the negative space, cap the product list
+      const listNat=list?list.scrollHeight:0;
+      let pMax=Math.min(listNat||avail, Math.max(120,Math.round(avail*0.40)));
+      if(list) list.style.maxHeight=pMax+'px';
+      if(mreq) mreq.style.maxHeight=Math.max(80,avail-pMax)+'px';
+    } else { const nat=mreq?mreq.scrollHeight:0;
+      let pMax=avail-nat;
+      if(pMax<140){ pMax=Math.max(100,Math.round(avail*0.55)); if(mreq) mreq.style.maxHeight=Math.max(60,avail-pMax)+'px'; }
+      if(list) list.style.maxHeight=Math.max(100,pMax)+'px'; }
+  }
 }catch(e){} }
 const PNAME={T:'Temperate',I:'Ice',G:'Gas',O:'Oceanic',L:'Lava',B:'Barren',S:'Storm',P:'Plasma',H:'Shattered'};
 
@@ -304,8 +321,9 @@ async function fetchPrices(station, ids){ const miss=ids.filter(t=>priceCache[st
     miss.forEach(t=>{ const d=j[t]||{}; priceCache[station+':'+t]={ sell:d.sell?+d.sell.min:0, buy:d.buy?+d.buy.max:0 }; });
   }catch(e){ pricesErr=e.message||'price fetch failed'; miss.forEach(t=>{ if(priceCache[station+':'+t]===undefined) priceCache[station+':'+t]=null; }); }
 }
-async function loadHubPrices(){ if(!target) return; const ids=chainTypeIds(target);
-  pricesLoading=true; pricesErr=null; renderProcure();
+async function loadHubPrices(){ const pids=Object.keys(sel); if(!pids.length){ renderProcure(); return; }
+  const idset=new Set(); pids.forEach(pid=>chainTypeIds(pid).forEach(t=>idset.add(t)));
+  const ids=[...idset]; pricesLoading=true; pricesErr=null; renderProcure();
   for(const [,st] of HUBS){ await fetchPrices(st, ids); renderProcure(); }
   pricesLoading=false; renderProcure(); }
 function reloadPrices(){ priceCache={}; pricesErr=null; loadHubPrices(); }
@@ -324,7 +342,9 @@ function listCost(items, st){ return items.reduce((s,[t,q])=>{ const p=px(st,t);
 function multibuyText(items){ return items.map(([t,q])=>`${PI.names[t]}\t${q}`).join('\n'); }
 
 // ---------- procurement state ----------
-let weekly=+(localStorage.getItem('pi_weekly')||100);
+let sel=JSON.parse(localStorage.getItem('pi_sel')||'{}');     // basket: product id -> qty/week
+let lastQty=+(localStorage.getItem('pi_weekly')||100);        // default qty for newly added products
+function saveSel(){ localStorage.setItem('pi_sel',JSON.stringify(sel)); }
 let buyHub=+(localStorage.getItem('pi_hub')||60003760);
 let buyP0=localStorage.getItem('pi_bp0')==='1';
 let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
@@ -337,46 +357,69 @@ function renderReq(){ if(!target){ $('req').innerHTML=''; return; }
     <div class="hint" style="margin-top:8px">Raw (P0): ${[...p0].map(p=>PI.names[p]).sort().join(', ')}</div>`;
   renderProcure(); }
 
-function renderProcure(){ const box=$('procure'); if(!box||!target) return;
-  const tgt=String(target); const consume=bom(tgt, Math.max(1,weekly));
-  const p0items=buyList(consume,'p0'), p1items=buyList(consume,'p1');
-  // product price comparison across hubs
-  const cmp=HUBS.map(([nm,st])=>{ const p=px(st,tgt);
-    return `<tr><td style="padding:1px 8px 1px 0">${nm}</td>
-      <td class="mono" style="text-align:right;color:var(--green)" title="lowest sell order">${p?fmtIsk(p.sell):(pricesLoading?'…':'—')}</td>
-      <td class="mono" style="text-align:right;color:var(--cyan)" title="highest buy order">${p?fmtIsk(p.buy):(pricesLoading?'…':'—')}</td></tr>`; }).join('');
+function renderProcure(){ const box=$('procure'); if(!box) return;
+  const pids=Object.keys(sel);
+  if(!pids.length){ box.innerHTML='<div class="hint" style="color:var(--muted2)">Tick one or more products in <b>Target product</b> to build a basket — you’ll get hub prices, an aggregated shopping list, and weekly profit/loss.</div>'; return; }
+  const byName=(a,b)=>PI.names[a[0]].localeCompare(PI.names[b[0]]);
+  // aggregate bill of materials across the whole basket
+  const agg={}; pids.forEach(pid=>{ const c=bom(pid,Math.max(1,sel[pid]||1)); for(const t in c) agg[t]=(agg[t]||0)+c[t]; });
+  const p0items=Object.keys(agg).filter(t=>PI.p0pt[t]).map(t=>[t,Math.ceil(agg[t])]).filter(x=>x[1]>0).sort(byName);
+  const p1items=Object.keys(agg).filter(t=>PI.tier[t]===1).map(t=>[t,Math.ceil(agg[t])]).filter(x=>x[1]>0).sort(byName);
+  // weekly revenue: sell finished products to buy orders at chosen hub
+  let revenue=0, revPriced=true;
+  pids.forEach(pid=>{ const p=px(buyHub,pid); if(p) revenue+=Math.max(1,sel[pid])*p.buy; else revPriced=false; });
+  const c0=listCost(p0items,buyHub), c1=listCost(p1items,buyHub);
+  const c0ok=p0items.length>0&&p0items.every(([t])=>px(buyHub,t));
+  const c1ok=p1items.length>0&&p1items.every(([t])=>px(buyHub,t));
   const hubSel=`<select id="hubSel" style="width:auto">${HUBS.map(([nm,st])=>`<option value="${st}" ${st===buyHub?'selected':''}>${nm}</option>`).join('')}</select>`;
-  const sec=(label,items,kind)=>{ if(!items.length) return '';
-    const cost=listCost(items,buyHub); const priced=items.every(([t])=>px(buyHub,t));
+  const basket=pids.slice().sort((a,b)=>PI.recipe[a].name.localeCompare(PI.recipe[b].name)).map(pid=>{ const p=px(buyHub,pid);
+    return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+      <span style="flex:1;font-size:12px;color:${target==pid?'var(--cyan-bright)':'var(--text)'}" title="${target==pid?'focus — drives map & colony plan':'click name in list to focus'}">${PI.recipe[pid].name}${target==pid?' ◂':''}</span>
+      <input type="number" min="1" class="qIn" data-o="${pid}" value="${Math.max(1,sel[pid])}" style="width:68px">
+      <span class="mono hint" style="width:60px;text-align:right" title="unit buy price at ${hubName(buyHub)}">${p?fmtIsk(p.buy):(pricesLoading?'…':'—')}</span>
+      <span class="prm" data-o="${pid}" style="cursor:pointer;color:var(--red);padding:0 2px" title="remove">×</span></div>`; }).join('');
+  const pl=(label,cost,ok,sel0)=>{ const profit=revenue-cost; const show=revPriced&&ok;
+    return `<tr style="${sel0?'background:rgba(201,168,104,.08)':''}">
+      <td style="padding:2px 8px 2px 0">${label}</td>
+      <td class="mono" style="text-align:right;color:var(--muted)">${cost===0?'0':(ok?fmtIsk(cost):'—')}</td>
+      <td class="mono" style="text-align:right;color:var(--cyan)">${revPriced?fmtIsk(revenue):'—'}</td>
+      <td class="mono" style="text-align:right;font-weight:600;color:${show?(profit>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${show?fmtIsk(profit):'—'}</td></tr>`; };
+  const hubcmp=HUBS.map(([nm,st])=>{ let v=0,ok=true; pids.forEach(pid=>{const p=px(st,pid); if(p)v+=Math.max(1,sel[pid])*p.buy; else ok=false;});
+    return `<tr><td style="padding:1px 10px 1px 0">${nm}</td><td class="mono" style="text-align:right;color:${st===buyHub?'var(--gold-bright)':'var(--cyan)'}">${ok?fmtIsk(v):(pricesLoading?'…':'—')}</td></tr>`; }).join('');
+  const sec=(label,items,kind,cost,ok)=>{ if(!items.length) return '';
     return `<div style="border:1px solid var(--line);margin-top:8px;padding:8px 10px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <b class="mono" style="color:var(--gold-bright)">${label} · ${items.length} items</b>
-        <span class="mono" style="font-size:11px;color:var(--muted)" title="at ${hubName(buyHub)} sell price">${priced?'≈ '+fmtIsk(cost)+' ISK':(pricesLoading?'pricing…':'price n/a')}</span></div>
-      <textarea id="mb_${kind}" readonly style="width:100%;height:78px;margin-top:6px;font-family:var(--mono,monospace);font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--line);resize:vertical">${multibuyText(items)}</textarea>
+        <span class="mono" style="font-size:11px;color:var(--muted)" title="at ${hubName(buyHub)} sell price">${ok?'≈ '+fmtIsk(cost)+' ISK':(pricesLoading?'pricing…':'price n/a')}</span></div>
+      <textarea id="mb_${kind}" readonly style="width:100%;height:80px;margin-top:6px;font-family:var(--mono,monospace);font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--line);resize:vertical">${multibuyText(items)}</textarea>
       <button class="mbcopy" data-k="${kind}" style="margin-top:5px;cursor:pointer">Copy multibuy</button>
       <span class="hint" id="mbok_${kind}" style="margin-left:8px"></span></div>`; };
-  // margin estimate per chosen strategy (sell finished to buy orders = instant)
-  const pTgt=px(buyHub,tgt); const revenue=pTgt? Math.max(1,weekly)*pTgt.buy : null;
-  const margin=(items)=>{ if(revenue==null) return ''; const c=listCost(items,buyHub);
-    const m=revenue-c; return `<div class="hint" style="margin-top:4px">Weekly sell-to-buy revenue ≈ <b>${fmtIsk(revenue)}</b> − inputs ≈ <b>${fmtIsk(c)}</b> = <b style="color:${m>=0?'var(--green)':'var(--red)'}">${fmtIsk(m)} ISK/wk</b> <span style="color:var(--muted2)">(pre-tax, excludes build time)</span></div>`; };
-  box.innerHTML=`<table class="mono" style="font-size:11px;border-collapse:collapse;margin-bottom:8px">
-      <tr class="hint"><td></td><td style="text-align:right;padding-left:14px">sell</td><td style="text-align:right;padding-left:10px">buy</td></tr>${cmp}</table>
-    <div class="hint" style="margin-bottom:6px">${pricesErr?`<span style="color:var(--amber)">price load issue: ${pricesErr} · </span>`:''}<span id="reloadPx" style="cursor:pointer;color:var(--cyan)">↻ reload prices</span></div>
+  box.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:6px">
-      <span style="display:flex;align-items:center;gap:6px">Want <input id="wkIn" type="number" min="1" value="${weekly}" style="width:74px"> / week</span>
-      <span style="display:flex;align-items:center;gap:6px">Buy at ${hubSel}</span></div>
-    <div style="display:flex;gap:16px;margin-bottom:2px" class="hint">
+      <span style="display:flex;align-items:center;gap:6px">Hub ${hubSel}</span>
+      <span class="hint">${pricesErr?`<span style="color:var(--amber)">price issue · </span>`:''}<span id="reloadPx" style="cursor:pointer;color:var(--cyan)">↻ reload</span></span></div>
+    <div style="margin-bottom:6px">${basket}
+      <div class="hint" style="margin-top:4px"><span id="clrSel" style="cursor:pointer;color:var(--muted)">clear basket</span></div></div>
+    <div style="display:flex;gap:16px;margin:4px 0 6px" class="hint">
       <label style="cursor:pointer"><input type="checkbox" id="cbP0" ${buyP0?'checked':''}> Buy P0 (raw)</label>
       <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label></div>
-    ${buyP0?sec('P0 raw materials',p0items,'p0'):''}${buyP0?margin(p0items):''}
-    ${buyP1?sec('P1 processed materials',p1items,'p1'):''}${buyP1?margin(p1items):''}
-    ${!buyP0&&!buyP1?'<div class="hint" style="color:var(--muted2)">Tick Buy P0 or Buy P1 to get a copy-paste EVE multibuy list.</div>':''}`;
-  // wire events
-  $('wkIn').onchange=e=>{ weekly=Math.max(1,+e.target.value||1); localStorage.setItem('pi_weekly',weekly); renderProcure(); };
+    <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:8px 0 3px">WEEKLY PROFIT / LOSS · WHOLE BASKET</div>
+    <table class="mono" style="font-size:11px;border-collapse:collapse;width:100%">
+      <tr class="hint"><td style="padding-right:8px">strategy</td><td style="text-align:right">inputs</td><td style="text-align:right">revenue</td><td style="text-align:right">profit</td></tr>
+      ${pl('Self-extract',0,true,!buyP0&&!buyP1)}${pl('Buy P0',c0,c0ok,buyP0&&!buyP1)}${pl('Buy P1',c1,c1ok,buyP1)}</table>
+    <div class="hint" style="margin:3px 0 6px;color:var(--muted2)">Revenue = sell finished goods to buy orders at ${hubName(buyHub)}; pre-tax, excludes build time / POCO tax.</div>
+    ${buyP0?sec('P0 shopping list',p0items,'p0',c0,c0ok):''}
+    ${buyP1?sec('P1 shopping list',p1items,'p1',c1,c1ok):''}
+    ${!buyP0&&!buyP1?'<div class="hint" style="color:var(--muted2)">Tick Buy P0 or Buy P1 for a copy-paste EVE multibuy list.</div>':''}
+    <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:12px 0 3px">BASKET VALUE BY HUB (sell-to-buy)</div>
+    <table class="mono" style="font-size:11px;border-collapse:collapse">${hubcmp}</table>`;
   $('hubSel').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderProcure(); };
+  $('reloadPx').onclick=reloadPrices;
+  $('clrSel').onclick=()=>{ sel={}; target=null; saveSel(); buildProducts(); renderReq(); compute(); fitSide(); };
+  box.querySelectorAll('.qIn').forEach(q=>q.onchange=()=>{ const o=q.dataset.o; sel[o]=Math.max(1,+q.value||1); lastQty=sel[o]; localStorage.setItem('pi_weekly',lastQty); saveSel(); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); });
+  box.querySelectorAll('.prm').forEach(x=>x.onclick=()=>toggleProduct(x.dataset.o));
   $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); };
   $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); };
-  $('reloadPx').onclick=reloadPrices;
   box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
     const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
     try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
@@ -572,6 +615,8 @@ setupBounds(); resize(); addEventListener('resize',()=>{resize();fitSide();});
 ['dProd','dMkt'].forEach(id=>{ const d=$(id); if(d) d.addEventListener('toggle',fitSide); });
 requestAnimationFrame(fitSide); setTimeout(fitSide,150);
 buildTiers(); buildProducts(); renderResults(); renderAuth();
+// restore a saved basket: focus the first selected product, show its tier, and load prices/shopping list
+(function(){ const k=Object.keys(sel); if(k.length){ target=k[0]; if(PI.tier[target]) { tier=PI.tier[target]; buildTiers(); } buildProducts(); renderReq(); compute(); loadHubPrices(); } else { renderProcure(); } })();
 (async()=>{ await handleRedirect(); renderAuth();
   for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); }
   if(!$('home').value){ const sys=Object.values(charLoc).find(s=>SYS[s]); if(sys){ $('home').value=SYS[sys][0]; if(target) compute(); } }
