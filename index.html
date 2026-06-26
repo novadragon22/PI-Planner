@@ -46,19 +46,12 @@
   .chip{flex:1;text-align:center;font-family:var(--mono);font-size:9px;text-transform:uppercase;padding:5px;border:1px solid var(--line2);color:var(--muted);cursor:pointer}
   .chip.on{color:var(--gold-bright);border-color:var(--gold-dim);background:rgba(201,168,104,.1)}
   .req{padding:10px 14px}
-  /* collapsible sections */
-  .sidetop{flex:1;display:flex;flex-direction:column;overflow-y:auto;min-height:0}
+  /* collapsible sections (heights are managed by fitSide() in JS for reliability) */
+  .sidetop{flex:1;min-height:0;overflow:hidden}
   .sidebot{flex:none;border-top:1px solid var(--line2)}
   .side details{border-bottom:1px solid var(--line)}
-  /* top sections: open one fills; when both open, Target product takes the slack, Market sits below at natural height */
-  .sidetop>details{flex:0 0 auto;min-height:0}
-  .sidetop>details[open]{display:flex;flex-direction:column}
-  #dProd[open]{flex:1 1 auto}
-  #dMkt[open]{flex:0 0 auto}
-  #dProd:not([open]) + #dMkt[open]{flex:1 1 auto}
-  #dProd[open] #prodList{flex:1 1 auto;overflow-y:auto;min-height:90px}
-  #dMkt[open]>.req{overflow-y:auto;min-height:0}
-  #dProd:not([open]) + #dMkt[open]>.req{flex:1 1 auto}
+  #prodList{overflow-y:auto;max-height:340px}
+  #dMkt>.req{overflow-y:auto}
   .side details>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
     font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);padding:11px 14px 9px;user-select:none}
   .side details>summary::-webkit-details-marker{display:none}
@@ -178,6 +171,8 @@ const $=id=>document.getElementById(id);
 // ---------- config (fresh, embedded; editable in Setup) ----------
 const APP={ clientId:'2f5f375112e64848ab34261092e6a756', redirect:location.origin+location.pathname };
 const cfg=JSON.parse(localStorage.getItem('pi_cfg')||'{}');   // stores UI scale only
+const UI_DEFAULT=150, UI_VER=3; // bump UI_VER to force a new default over any saved value
+if(cfg.uiVer!==UI_VER){ cfg.ui=UI_DEFAULT; cfg.uiVer=UI_VER; localStorage.setItem('pi_cfg',JSON.stringify(cfg)); }
 const SCOPES='publicData esi-planets.manage_planets.v1 esi-location.read_location.v1 esi-skills.read_skills.v1';
 
 const SYS=UNIVERSE.systems, REG=UNIVERSE.regions, PTN=UNIVERSE.planetTypes;
@@ -274,7 +269,23 @@ function buildProducts(){ const ids=Object.keys(PI.recipe).filter(o=>PI.tier[o]=
     <span class="nm">${PI.recipe[o].name}</span><span class="tg">P${PI.tier[o]}</span></div>`).join('');
   $('prodList').querySelectorAll('.prod').forEach(d=>d.onclick=()=>selectTarget(d.dataset.o)); }
 
-function selectTarget(o){ target=o; buildProducts(); renderReq(); compute(); loadHubPrices(); }
+function selectTarget(o){ target=o; buildProducts(); renderReq(); compute(); loadHubPrices(); fitSide(); }
+// size the two top sections so the open one(s) fill the space and scroll internally (Target product gets the slack when both are open)
+function fitSide(){ try{
+  const top=document.querySelector('.sidetop'); const dProd=$('dProd'), dMkt=$('dMkt'); if(!top||!dProd||!dMkt) return;
+  const list=$('prodList'); const mreq=dMkt.querySelector('.req');
+  if(list) list.style.maxHeight=''; if(mreq) mreq.style.maxHeight='';
+  const H=top.clientHeight; if(!H) return;
+  const sumP=dProd.querySelector('summary').offsetHeight, sumM=dMkt.querySelector('summary').offsetHeight;
+  const tiers=$('tiers'); const tiersH=(dProd.open&&tiers)?tiers.offsetHeight:0;
+  const pOpen=dProd.open, mOpen=dMkt.open;
+  if(pOpen&&!mOpen){ if(list) list.style.maxHeight=Math.max(60,H-sumP-tiersH-sumM)+'px'; }
+  else if(!pOpen&&mOpen){ if(mreq) mreq.style.maxHeight=Math.max(60,H-sumP-sumM)+'px'; }
+  else if(pOpen&&mOpen){ const avail=H-sumP-tiersH-sumM; const nat=mreq?mreq.scrollHeight:0;
+    let pMax=avail-nat;
+    if(pMax<140){ pMax=Math.max(100,Math.round(avail*0.55)); if(mreq) mreq.style.maxHeight=Math.max(60,avail-pMax)+'px'; }
+    if(list) list.style.maxHeight=Math.max(100,pMax)+'px'; }
+}catch(e){} }
 const PNAME={T:'Temperate',I:'Ice',G:'Gas',O:'Oceanic',L:'Lava',B:'Barren',S:'Storm',P:'Plasma',H:'Shattered'};
 
 // ---------- market hubs + pricing (Fuzzwork aggregate API, runs in browser) ----------
@@ -369,7 +380,8 @@ function renderProcure(){ const box=$('procure'); if(!box||!target) return;
   box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
     const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
     try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
-    catch(_){ ta.select(); try{document.execCommand('copy');}catch(__){} done(); } }); }
+    catch(_){ ta.select(); try{document.execCommand('copy');}catch(__){} done(); } });
+  fitSide(); }
 
 // ---------- locator ----------
 function compute(){ if(!target){ results=[]; drawMap(); renderResults(); return; }
@@ -547,16 +559,18 @@ function renderAuth(){ const a=$('auth'); const ids=Object.keys(chars).map(Numbe
 
 // ---------- UI scale ----------
 function applyUi(pct){ const v=Math.max(50,Math.min(500,+pct||150))/100; document.documentElement.style.setProperty('--ui',v);
-  cfg.ui=Math.round(v*100); localStorage.setItem('pi_cfg',JSON.stringify(cfg)); if(typeof resize==='function') requestAnimationFrame(resize); }
-if(cfg.ui) applyUi(cfg.ui);
+  cfg.ui=Math.round(v*100); localStorage.setItem('pi_cfg',JSON.stringify(cfg)); if(typeof resize==='function') requestAnimationFrame(()=>{resize();fitSide();}); }
+applyUi(cfg.ui||UI_DEFAULT);
 // ---------- scale modal (scale only; credentials are embedded and never shown) ----------
-function openSetup(){ const v=cfg.ui||150; $('cfgUi').value=v; $('cfgUiRange').value=v; $('setModal').classList.add('show'); }
+function openSetup(){ const v=cfg.ui||UI_DEFAULT; $('cfgUi').value=v; $('cfgUiRange').value=v; $('setModal').classList.add('show'); }
 $('setBtn').onclick=openSetup; $('cfgClose').onclick=()=>$('setModal').classList.remove('show');
 $('cfgUi').oninput=()=>{ $('cfgUiRange').value=$('cfgUi').value; applyUi($('cfgUi').value); };
 $('cfgUiRange').oninput=()=>{ $('cfgUi').value=$('cfgUiRange').value; applyUi($('cfgUiRange').value); };
 
 // ---------- boot ----------
-setupBounds(); resize(); addEventListener('resize',resize);
+setupBounds(); resize(); addEventListener('resize',()=>{resize();fitSide();});
+['dProd','dMkt'].forEach(id=>{ const d=$(id); if(d) d.addEventListener('toggle',fitSide); });
+requestAnimationFrame(fitSide); setTimeout(fitSide,150);
 buildTiers(); buildProducts(); renderResults(); renderAuth();
 (async()=>{ await handleRedirect(); renderAuth();
   for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); }
