@@ -166,6 +166,19 @@ const CCU_BUDGET={0:[1675,6000],1:[7057,9000],2:[12137,12000],3:[17217,15000],4:
 const FAC={basic:{cpu:200,pg:800},adv:{cpu:500,pg:700},ecu:{cpu:400,pg:2600,headCpu:110,headPg:550},launch:{cpu:3600,pg:700},store:{cpu:500,pg:700}};
 let skillMap={}; // merged skill_id -> level across logged-in chars
 function skillLvl(id,def){ return skillMap[id]!=null?skillMap[id]:def; }
+// PI skill type IDs (from SDE) -> short label + what they affect, in display order
+const PISKILLS=[
+  [2505,'Command Center Upgrades','CPU/PG budget'],
+  [2495,'Interplanetary Consolidation','planets per character'],
+  [13279,'Remote Sensing','required to scan planets'],
+  [2406,'Planetology','scan accuracy / yield'],
+  [2403,'Advanced Planetology','scan accuracy / yield']
+];
+const ROMAN=['0','I','II','III','IV','V'];
+function piSkillRows(){ return PISKILLS.map(([id,nm,eff])=>{ const lv=skillMap[id]; const has=lv!=null;
+  return `<span style="display:inline-flex;gap:5px;align-items:center;margin:0 10px 4px 0">
+    <span style="color:${has?'var(--gold-bright)':'var(--muted2)'}">${nm}</span>
+    <b class="mono" style="color:${has?(lv>=4?'var(--green)':'var(--amber)'):'var(--muted2)'}">${has?ROMAN[lv]||lv:'—'}</b></span>`; }).join(''); }
 // planet type that a P0 can use, present in the system
 function chainTiers(target){ // returns ordered list of schematic outputs in the chain by tier (>=1)
   const seen=new Set(), list=[]; (function rec(t){ const r=PI.recipe[t]; if(!r)return; r.in.forEach(([x])=>rec(String(x)));
@@ -213,14 +226,104 @@ function buildProducts(){ const ids=Object.keys(PI.recipe).filter(o=>PI.tier[o]=
     <span class="nm">${PI.recipe[o].name}</span><span class="tg">P${PI.tier[o]}</span></div>`).join('');
   $('prodList').querySelectorAll('.prod').forEach(d=>d.onclick=()=>selectTarget(d.dataset.o)); }
 
-function selectTarget(o){ target=o; buildProducts(); renderReq(); compute(); }
+function selectTarget(o){ target=o; buildProducts(); renderReq(); compute(); loadHubPrices(); }
 const PNAME={T:'Temperate',I:'Ice',G:'Gas',O:'Oceanic',L:'Lava',B:'Barren',S:'Storm',P:'Plasma',H:'Shattered'};
+
+// ---------- market hubs + pricing (Fuzzwork aggregate API, runs in browser) ----------
+const HUBS=[['Jita',60003760],['Amarr',60008494],['Dodixie',60011866],['Rens',60004588],['Hek',60005686]];
+function hubName(st){ const h=HUBS.find(h=>h[1]===st); return h?h[0]:'hub'; }
+let priceCache={}; // 'station:typeId' -> {sell,buy} | null(failed)
+let pricesLoading=false, pricesErr=null;
+function px(st,t){ return priceCache[st+':'+t]; }
+function fmtIsk(n){ if(n==null) return '—'; if(!n) return '0'; const a=Math.abs(n);
+  if(a>=1e9) return (n/1e9).toFixed(2)+'b'; if(a>=1e6) return (n/1e6).toFixed(2)+'m'; if(a>=1e3) return (n/1e3).toFixed(1)+'k'; return Math.round(n).toString(); }
+function chainTypeIds(t){ return [...new Set(Object.keys(bom(t,1)))]; }
+async function fetchPrices(station, ids){ const miss=ids.filter(t=>priceCache[station+':'+t]===undefined);
+  if(!miss.length) return;
+  try{ const url=`https://market.fuzzwork.co.uk/aggregates/?station=${station}&types=${miss.join(',')}`;
+    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status); const j=await r.json();
+    miss.forEach(t=>{ const d=j[t]||{}; priceCache[station+':'+t]={ sell:d.sell?+d.sell.min:0, buy:d.buy?+d.buy.max:0 }; });
+  }catch(e){ pricesErr=e.message||'price fetch failed'; miss.forEach(t=>{ if(priceCache[station+':'+t]===undefined) priceCache[station+':'+t]=null; }); }
+}
+async function loadHubPrices(){ if(!target) return; const ids=chainTypeIds(target);
+  pricesLoading=true; pricesErr=null; renderProcure();
+  for(const [,st] of HUBS){ await fetchPrices(st, ids); renderProcure(); }
+  pricesLoading=false; renderProcure(); }
+function reloadPrices(){ priceCache={}; pricesErr=null; loadHubPrices(); }
+
+// ---------- bill of materials (cycle-accurate) ----------
+function bom(targetId, units){ const consume={};
+  (function req(t, qty){ consume[t]=(consume[t]||0)+qty; const r=PI.recipe[t]; if(!r) return;
+    const cycles=Math.ceil(qty/r.out); r.in.forEach(([x,q])=>req(String(x), cycles*q)); })(String(targetId), units);
+  return consume; }
+function buyList(consume, kind){ // kind: 'p0' | 'p1'
+  const items=Object.keys(consume).filter(t=> kind==='p0' ? PI.p0pt[t] : PI.tier[t]===1 )
+    .map(t=>[t, Math.ceil(consume[t])]).filter(([,q])=>q>0)
+    .sort((a,b)=>PI.names[a[0]].localeCompare(PI.names[b[0]]));
+  return items; }
+function listCost(items, st){ return items.reduce((s,[t,q])=>{ const p=px(st,t); return s + q*((p&&p.sell)||0); },0); }
+function multibuyText(items){ return items.map(([t,q])=>`${PI.names[t]}\t${q}`).join('\n'); }
+
+// ---------- procurement state ----------
+let weekly=+(localStorage.getItem('pi_weekly')||100);
+let buyHub=+(localStorage.getItem('pi_hub')||60003760);
+let buyP0=localStorage.getItem('pi_bp0')==='1';
+let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
+
 function renderReq(){ if(!target){ $('req').innerHTML=''; return; }
   const p0=p0NeedsFor(target); const codes={}; p0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>codes[c]=1));
   $('req').innerHTML=`<h3 style="padding:0 0 6px">Chain needs</h3>
     <div class="hint" style="margin-bottom:6px">${[...p0].length} raw materials · ${Object.keys(codes).length} planet types</div>
     <div>${Object.keys(codes).sort().map(c=>`<span class="ptpill"><i style="width:8px;height:8px;border-radius:50%;background:${PT_COLOR[c]};display:inline-block"></i>${PNAME[c]}</span>`).join('')}</div>
-    <div class="hint" style="margin-top:8px">Raw (P0): ${[...p0].map(p=>PI.names[p]).sort().join(', ')}</div>`; }
+    <div class="hint" style="margin-top:8px">Raw (P0): ${[...p0].map(p=>PI.names[p]).sort().join(', ')}</div>
+    <div id="procure" style="margin-top:12px"></div>`;
+  renderProcure(); }
+
+function renderProcure(){ const box=$('procure'); if(!box||!target) return;
+  const tgt=String(target); const consume=bom(tgt, Math.max(1,weekly));
+  const p0items=buyList(consume,'p0'), p1items=buyList(consume,'p1');
+  // product price comparison across hubs
+  const cmp=HUBS.map(([nm,st])=>{ const p=px(st,tgt);
+    return `<tr><td style="padding:1px 8px 1px 0">${nm}</td>
+      <td class="mono" style="text-align:right;color:var(--green)" title="lowest sell order">${p?fmtIsk(p.sell):(pricesLoading?'…':'—')}</td>
+      <td class="mono" style="text-align:right;color:var(--cyan)" title="highest buy order">${p?fmtIsk(p.buy):(pricesLoading?'…':'—')}</td></tr>`; }).join('');
+  const hubSel=`<select id="hubSel" style="width:auto">${HUBS.map(([nm,st])=>`<option value="${st}" ${st===buyHub?'selected':''}>${nm}</option>`).join('')}</select>`;
+  const sec=(label,items,kind)=>{ if(!items.length) return '';
+    const cost=listCost(items,buyHub); const priced=items.every(([t])=>px(buyHub,t));
+    return `<div style="border:1px solid var(--line);margin-top:8px;padding:8px 10px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b class="mono" style="color:var(--gold-bright)">${label} · ${items.length} items</b>
+        <span class="mono" style="font-size:11px;color:var(--muted)" title="at ${hubName(buyHub)} sell price">${priced?'≈ '+fmtIsk(cost)+' ISK':(pricesLoading?'pricing…':'price n/a')}</span></div>
+      <textarea id="mb_${kind}" readonly style="width:100%;height:78px;margin-top:6px;font-family:var(--mono,monospace);font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--line);resize:vertical">${multibuyText(items)}</textarea>
+      <button class="mbcopy" data-k="${kind}" style="margin-top:5px;cursor:pointer">Copy multibuy</button>
+      <span class="hint" id="mbok_${kind}" style="margin-left:8px"></span></div>`; };
+  // margin estimate per chosen strategy (sell finished to buy orders = instant)
+  const pTgt=px(buyHub,tgt); const revenue=pTgt? Math.max(1,weekly)*pTgt.buy : null;
+  const margin=(items)=>{ if(revenue==null) return ''; const c=listCost(items,buyHub);
+    const m=revenue-c; return `<div class="hint" style="margin-top:4px">Weekly sell-to-buy revenue ≈ <b>${fmtIsk(revenue)}</b> − inputs ≈ <b>${fmtIsk(c)}</b> = <b style="color:${m>=0?'var(--green)':'var(--red)'}">${fmtIsk(m)} ISK/wk</b> <span style="color:var(--muted2)">(pre-tax, excludes build time)</span></div>`; };
+  box.innerHTML=`<h3 style="padding:6px 0">Market &amp; shopping list</h3>
+    <table class="mono" style="font-size:11px;border-collapse:collapse;margin-bottom:8px">
+      <tr class="hint"><td></td><td style="text-align:right;padding-left:14px">sell</td><td style="text-align:right;padding-left:10px">buy</td></tr>${cmp}</table>
+    <div class="hint" style="margin-bottom:6px">${pricesErr?`<span style="color:var(--amber)">price load issue: ${pricesErr} · </span>`:''}<span id="reloadPx" style="cursor:pointer;color:var(--cyan)">↻ reload prices</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:6px">
+      <span style="display:flex;align-items:center;gap:6px">Want <input id="wkIn" type="number" min="1" value="${weekly}" style="width:74px"> / week</span>
+      <span style="display:flex;align-items:center;gap:6px">Buy at ${hubSel}</span></div>
+    <div style="display:flex;gap:16px;margin-bottom:2px" class="hint">
+      <label style="cursor:pointer"><input type="checkbox" id="cbP0" ${buyP0?'checked':''}> Buy P0 (raw)</label>
+      <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label></div>
+    ${buyP0?sec('P0 raw materials',p0items,'p0'):''}${buyP0?margin(p0items):''}
+    ${buyP1?sec('P1 processed materials',p1items,'p1'):''}${buyP1?margin(p1items):''}
+    ${!buyP0&&!buyP1?'<div class="hint" style="color:var(--muted2)">Tick Buy P0 or Buy P1 to get a copy-paste EVE multibuy list.</div>':''}`;
+  // wire events
+  $('wkIn').onchange=e=>{ weekly=Math.max(1,+e.target.value||1); localStorage.setItem('pi_weekly',weekly); renderProcure(); };
+  $('hubSel').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderProcure(); };
+  $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); };
+  $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); };
+  $('reloadPx').onclick=reloadPrices;
+  box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
+    const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
+    try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
+    catch(_){ ta.select(); try{document.execCommand('copy');}catch(__){} done(); } }); }
 
 // ---------- locator ----------
 function compute(){ if(!target){ results=[]; drawMap(); renderResults(); return; }
@@ -284,6 +387,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
     Planets available to you: <b style="color:var(--gold-bright)">${plan.maxPlanets}</b> (Interplanetary Consolidation ${plan.ic}) ·
     command-center budget <b>CPU ${plan.cpuB} / PG ${plan.pgB}</b> (Command Center Upgrades ${plan.ccu})
     ${loggedIn?'· from your skills':'· assumed — adjust below'}</div>
+    ${loggedIn?`<div style="padding:0 14px 6px" class="hint"><span style="color:var(--muted2)">Your PI skills (from ESI):</span><br>${piSkillRows()}</div>`:''}
     <div style="padding:0 14px 6px;display:flex;gap:16px;align-items:center" class="hint">
       <span style="display:flex;align-items:center;gap:6px">Interplanetary&nbsp;Consolidation <select id="icSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ic?'selected':''}>${l}</option>`).join('')}</select></span>
       <span style="display:flex;align-items:center;gap:6px">Command&nbsp;Center&nbsp;Upgrades <select id="ccuSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ccu?'selected':''}>${l}</option>`).join('')}</select></span></div>
@@ -350,6 +454,7 @@ function flashSystem(id){ chosen=id; drawMap(); }
 async function loadSkills(id){ try{ const sk=await eGet(id,`/characters/${id}/skills/`);
     (sk.skills||[]).forEach(s=>{ skillMap[s.skill_id]=Math.max(skillMap[s.skill_id]||0,s.trained_skill_level); });
     if(skillMap[2495]!=null) icOverride=skillMap[2495]; if(skillMap[2505]!=null) ccuOverride=skillMap[2505];
+    if(viewing==='colony'&&chosen&&target) renderColony();
   }catch(e){} }
 
 // ---------- filters ----------
