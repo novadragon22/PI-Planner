@@ -147,7 +147,7 @@
         <div class="zoomctl"><button id="zin">+</button><button id="zout">−</button><button id="zreset" title="reset view">⟲</button></div>
         <div class="legend" id="legend"></div></div>
       <div class="results">
-        <div class="hd"><b id="resHd">Candidate systems</b><span class="sp"></span><span id="closest" class="mono" style="font-size:11px;cursor:pointer;color:var(--cyan-bright)"></span></div>
+        <div class="hd"><span id="navView" class="mono" style="font-size:10px;display:flex;gap:6px"></span><b id="resHd">Candidate systems</b><span class="sp"></span><span id="closest" class="mono" style="font-size:11px;cursor:pointer;color:var(--cyan-bright)"></span></div>
         <div class="scroll" style="flex:1"><table><thead id="resHead"></thead><tbody id="resBody"></tbody></table></div>
       </div>
     </div>
@@ -191,6 +191,19 @@ function tierName(t){ return 'P'+t; }
 // ---------- universe graph (BFS jumps from home) ----------
 function bfs(home){ const dist={}; if(!home) return dist; dist[home]=0; const q=[home];
   for(let i=0;i<q.length;i++){ const u=q[i]; for(const v of SYS[u][6]){ if(dist[v]===undefined){ dist[v]=dist[u]+1; q.push(v); } } } return dist; }
+// combined P0 needs across the whole selected basket (falls back to the focus target)
+function basketP0(){ const out=new Set(); const pids=Object.keys(sel); const src=pids.length?pids:(target?[String(target)]:[]);
+  src.forEach(pid=>p0NeedsFor(pid).forEach(p=>out.add(p))); return [...out]; }
+// nearest system to fromId (fewest jumps) that supplies the most of the missing planet types
+function nearestForMissing(fromId, missingP0){
+  const need=new Set(); missingP0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>need.add(c)));
+  if(!need.size) return null; const dist=bfs(fromId); let best=null;
+  for(const id of sysIds){ if(id===fromId) continue; const j=dist[id]; if(j===undefined) continue;
+    const have=SYS[id][5]; let covers=0; const got=[]; need.forEach(c=>{ if(have[c]){ covers++; got.push(c); } });
+    if(!covers) continue;
+    if(!best || covers>best.covers || (covers===best.covers && j<best.jumps)) best={id,jumps:j,covers,got};
+  }
+  return best; }
 
 // ---------- PI colony layout (SDE-accurate CPU/PG) ----------
 // command-center budget [CPU,PG] by Command Center Upgrades level (base from SDE: 1675/6000)
@@ -448,8 +461,7 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   fitSide(); }
 
 // ---------- locator ----------
-function compute(){ if(!target){ results=[]; drawMap(); renderResults(); return; }
-  const p0=[...p0NeedsFor(target)];
+function compute(){ const p0=basketP0(); if(!p0.length){ results=[]; closestSys=null; drawMap(); renderResults(); return; }
   homeId = nameToId[($('home').value||'').trim().toLowerCase()]||null;
   distCache = homeId?bfs(homeId):{};
   const cand=[];
@@ -475,22 +487,24 @@ function compute(){ if(!target){ results=[]; drawMap(); renderResults(); return;
 
 function secClass(s){ return s>=0.45?'sec-h':s>0?'sec-l':'sec-n'; }
 function renderResults(){
-  $('resHd').textContent = target? `${results.length} candidate systems for ${PI.recipe[target].name}` : 'Candidate systems';
+  const pids=Object.keys(sel); const basket=basketP0();
+  const lbl = pids.length>1 ? `${pids.length} products` : (pids.length===1?PI.recipe[pids[0]].name:(target?PI.recipe[target].name:''));
+  $('resHd').textContent = basket.length? `${results.length} candidate systems for ${lbl}` : 'Candidate systems';
   const cl=$('closest');
-  if(closestSys&&target){ const s=SYS[closestSys.id]; const full=closestSys.covered===closestSys.total;
+  if(closestSys&&basket.length){ const s=SYS[closestSys.id]; const full=closestSys.covered===closestSys.total;
     cl.innerHTML=`▸ closest ${full?'full-chain':closestSys.covered+'/'+closestSys.total}: <b>${s[0]}</b> · ${closestSys.jumps} jump${closestSys.jumps!==1?'s':''}`;
     cl.onclick=()=>{ selectSystem(closestSys.id); }; }
   else cl.innerHTML='';
   $('resHead').innerHTML = `<tr><th>System</th><th>Region</th><th class="r">Sec</th><th>Planets (needed types)</th><th class="r">Coverage</th>${homeId?'<th class="r">Jumps</th>':''}</tr>`;
-  if(!target){ $('resBody').innerHTML=`<tr><td colspan="6"><div class="hint" style="padding:8px 0">Select a target product to locate systems.</div></td></tr>`; return; }
-  const p0=[...p0NeedsFor(target)]; const neededCodes=new Set(); p0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
+  if(!basket.length){ $('resBody').innerHTML=`<tr><td colspan="6"><div class="hint" style="padding:8px 0">Select one or more target products to locate systems.</div></td></tr>`; return; }
+  const neededCodes=new Set(); basket.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
   $('resBody').innerHTML = results.map(r=>{ const s=SYS[r.id];
     const pts=Object.keys(s[5]).filter(c=>neededCodes.has(c)).sort().map(c=>`<span class="mono" style="color:${PT_COLOR[c]}">${c}${s[5][c]}</span>`).join(' ');
     return `<tr class="row" data-id="${r.id}"><td>${s[0]}</td><td class="mono" style="color:var(--muted)">${REG[s[2]]||''}</td>
       <td class="r mono ${secClass(r.sec)}">${r.sec.toFixed(1)}</td><td>${pts}</td>
       <td class="r mono ${r.covered===r.total?'full':'part'}">${r.covered}/${r.total}</td>${homeId?`<td class="r mono cy">${r.jumps===Infinity?'—':r.jumps}</td>`:''}</tr>`; }).join('')
     || `<tr><td colspan="6"><div class="hint" style="padding:8px 0">No systems match — loosen the security filter or turn off “whole chain in one system”.</div></td></tr>`;
-  $('resBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>selectSystem(+tr.dataset.id)); }
+  $('resBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>selectSystem(+tr.dataset.id)); renderNav(); }
 
 function selectSystem(id){ chosen=id; viewing='colony'; drawMap(); renderColony(); }
 const PNAME2={T:'Temperate',I:'Ice',G:'Gas',O:'Oceanic',L:'Lava',B:'Barren',S:'Storm',P:'Plasma',H:'Shattered'};
@@ -540,7 +554,11 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       ? `<b style="color:var(--cyan-bright)">${fcrew.name}</b> runs <b style="color:${filtered.length>fcrew.cap?'var(--red)':'var(--green)'}">${filtered.length}</b> of their ${fcrew.cap} planets (${fcrew.role==='extract'?'Extractor':'Factory'}).`
       : `Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; add a character or import some inputs`:''}.`}</div>`;
   filtered.forEach((p,i)=>{ html+=card(`Planet ${i+1} · ${p.title}`, p.sub, p.fac, p.cpu, p.pg, p.cpuB, p.pgB, p.who); });
-  if(crewFilter==='all' && plan.unassigned.length) html+=`<div class="hint" style="color:var(--amber);padding:6px 14px">No planet in this system for: ${plan.unassigned.map(p=>PI.names[p]).join(', ')} — buy these (tick Buy P0) or pick a fuller system.</div>`;
+  if(crewFilter==='all' && plan.unassigned.length){
+    const sug=nearestForMissing(chosen, plan.unassigned);
+    const sugBtn = sug ? `<div style="margin-top:6px"><span id="sugSys" data-id="${sug.id}" style="cursor:pointer;display:inline-block;font-family:var(--mono);font-size:11px;padding:5px 10px;border:1px solid var(--gold-dim);color:var(--gold-bright);background:rgba(201,168,104,.10)">▸ Suggested: ${SYS[sug.id][0]} · ${sug.jumps} jump${sug.jumps!==1?'s':''} — adds ${sug.got.map(c=>PNAME2[c]).join(', ')}</span></div>` : '';
+    html+=`<div class="hint" style="color:var(--amber);padding:6px 14px">No planet in this system for: ${plan.unassigned.map(p=>PI.names[p]).join(', ')} — buy these (tick Buy P0), or set up a feeder colony in the nearest system that has them.${sugBtn}</div>`;
+  }
   const modeTag=plan.mode==='buyP1'?'Buying P1 (processed)':plan.mode==='buyP0'?'Buying P0 (raw)':'Self-extracting';
   html+=`<div class="hint" style="padding:6px 14px 12px"><b style="color:var(--cyan)">${modeTag}.</b> ${plan.note}</div>`;
   $('resBody').innerHTML=`<tr><td style="padding:0">${html}</td></tr>`;
@@ -549,6 +567,98 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   $('ccuSel').onchange=e=>{ ccuOverride=+e.target.value; renderColony(); };
   $('resBody').querySelectorAll('.rolebtn').forEach(b=>b.onclick=()=>setRole(b.dataset.id,b.dataset.r));
   if($('crewSel')) $('crewSel').onchange=e=>{ crewFilter=e.target.value; renderColony(); };
+  if($('sugSys')) $('sugSys').onclick=()=>selectSystem(+$('sugSys').dataset.id);
+  renderNav();
+}
+
+// ---------- view switcher ----------
+function renderNav(){ const n=$('navView'); if(!n) return; const grp=(viewing==='mine')?'mine':(viewing==='make')?'make':'cand';
+  const b=(k,lbl)=>`<span class="navbtn" data-v="${k}" style="cursor:pointer;padding:3px 8px;border:1px solid ${grp===k?'var(--gold-dim)':'var(--line2)'};color:${grp===k?'var(--gold-bright)':'var(--muted)'};background:${grp===k?'rgba(201,168,104,.12)':'transparent'}">${lbl}</span>`;
+  n.innerHTML=b('cand','Candidates')+b('mine','My colonies')+b('make','What to make');
+  n.querySelectorAll('.navbtn').forEach(x=>x.onclick=()=>setView(x.dataset.v)); }
+function setView(v){ if(v==='mine'){ viewing='mine'; renderMine(); }
+  else if(v==='make'){ viewing='make'; renderMake(); }
+  else { viewing= chosen?'colony':'list'; if(viewing==='colony') renderColony(); else renderResults(); }
+  drawMap(); }
+
+// ---------- My colonies (live from ESI) + extractor modeling ----------
+let colDetail={}; // planet_id -> {extractors:[{prod,perHr,heads,cycle,qty}], factoryPins, ecuPins}
+async function loadColonyDetail(id, pid){ if(colDetail[pid]) return colDetail[pid];
+  try{ const d=await eGet(id,`/characters/${id}/planets/${pid}/`);
+    const ex=[]; let factoryPins=0, ecuPins=0;
+    (d.pins||[]).forEach(p=>{ if(p.extractor_details){ ecuPins++; const ed=p.extractor_details;
+        const perHr = ed.qty_per_cycle&&ed.cycle_time ? ed.qty_per_cycle/(ed.cycle_time/3600) : 0;
+        ex.push({prod:ed.product_type_id, perHr, qty:ed.qty_per_cycle||0, cycle:ed.cycle_time||0, heads:(ed.heads||[]).length}); }
+      else if(p.schematic_id){ factoryPins++; } });
+    colDetail[pid]={extractors:ex, factoryPins, ecuPins}; }catch(e){ colDetail[pid]={extractors:[],factoryPins:0,ecuPins:0,err:1}; }
+  return colDetail[pid]; }
+async function renderMine(){ renderNav(); $('resHd').innerHTML='My colonies <span class="hint" style="font-weight:400">· live from ESI</span>'; $('closest').innerHTML=''; $('resHead').innerHTML='';
+  const ids=Object.keys(chars); if(!ids.length){ $('resBody').innerHTML=`<tr><td><div class="hint" style="padding:10px 14px">Log in with EVE (top-right) to read your live colonies, extractor rates, and outputs.</div></td></tr>`; return; }
+  // gather all colonies
+  const rows=[]; ids.forEach(id=>(colonies[id]||[]).forEach(c=>rows.push({id,c})));
+  if(!rows.length){ $('resBody').innerHTML=`<tr><td><div class="hint" style="padding:10px 14px">No planetary colonies found on your characters.</div></td></tr>`; return; }
+  $('resBody').innerHTML=`<tr><td><div class="hint" style="padding:8px 14px">Loading colony details…</div></td></tr>`;
+  // fetch details (cached)
+  await Promise.all(rows.map(r=>loadColonyDetail(r.id, r.c.planet_id)));
+  // aggregate live P0 extraction across all colonies (units/hr per product)
+  const extAgg={}; rows.forEach(r=>{ (colDetail[r.c.planet_id].extractors||[]).forEach(e=>{ extAgg[e.prod]=(extAgg[e.prod]||0)+e.perHr; }); });
+  const PTC={2014:'Temperate'};
+  let html=`<div style="padding:8px 14px" class="hint">${rows.length} colonies across ${ids.length} character${ids.length>1?'s':''}. Extraction rates are read straight from each running extractor (exact).</div>`;
+  rows.forEach(({id,c})=>{ const det=colDetail[c.planet_id]; const sysNm=SYS[c.system]?SYS[c.system][0]:('System '+c.system);
+    const exHtml=(det.extractors||[]).length? det.extractors.map(e=>`<div class="mono" style="font-size:12px">⛏ ${PI.names[e.prod]||('type '+e.prod)} · <b style="color:var(--green)">${Math.round(e.perHr).toLocaleString()}/hr</b> <span class="hint">(${e.qty.toLocaleString()}/cycle, ${Math.round(e.cycle/3600)}h, ${e.heads} heads)</span></div>`).join('') : '<div class="hint" style="font-size:12px">No active extractors</div>';
+    html+=`<div style="border:1px solid var(--line);margin:8px 14px;padding:9px 12px">
+      <div style="display:flex;justify-content:space-between"><b class="mono" style="color:var(--gold-bright)">${sysNm} · ${c.type?c.type[0].toUpperCase()+c.type.slice(1):''}</b>
+        <span class="mono hint">${chars[id].name} · CC L${c.upgrade} · ${c.pins} pins</span></div>
+      <div style="margin-top:5px">${exHtml}</div>
+      ${det.factoryPins?`<div class="hint" style="font-size:12px;margin-top:3px">🏭 ${det.factoryPins} factory pin${det.factoryPins>1?'s':''} running</div>`:''}</div>`; });
+  // total live extraction → how many P1 basic facilities it can feed (extractor modeling)
+  const exKeys=Object.keys(extAgg);
+  if(exKeys.length){ html+=`<div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:12px 14px 4px">LIVE EXTRACTION → FACTORY CAPACITY</div>
+    <table class="mono" style="font-size:11px;border-collapse:collapse;margin:0 14px 6px"><tr class="hint"><td style="padding-right:10px">raw (P0)</td><td style="text-align:right;padding-right:10px">units/hr</td><td style="text-align:right">feeds Basic facilities</td></tr>
+    ${exKeys.map(t=>{ const perHr=extAgg[t]; const feeds=perHr/6000; /* P1 basic: 3000 P0 per 1800s = 6000/hr */
+      return `<tr><td style="padding-right:10px">${PI.names[t]||t}</td><td style="text-align:right;padding-right:10px;color:var(--green)">${Math.round(perHr).toLocaleString()}</td><td style="text-align:right">${feeds.toFixed(2)}×</td></tr>`; }).join('')}</table>
+    <div class="hint" style="padding:0 14px 12px;color:var(--muted2)">One Basic Industry Facility consumes 6,000 P0/hr (3,000 every 30 min). Use this to balance how many P1 factories each extractor can keep fed.</div>`; }
+  $('resBody').innerHTML=`<tr><td style="padding:0">${html}</td></tr>`; }
+
+// ---------- What should I make? (rank products by profit) ----------
+let makeTier=4;
+function unitEconomics(prod, st){ // returns {rev, costP1, costP0, out, ct} per single craft run, using prices at st
+  const r=PI.recipe[prod]; if(!r) return null; const p=px(st,prod); if(!p) return null;
+  const consume=bom(prod, r.out);
+  const p1=Object.keys(consume).filter(t=>PI.tier[t]===1), p0=Object.keys(consume).filter(t=>PI.p0pt[t]);
+  let costP1=0,okP1=true; p1.forEach(t=>{ const q=Math.ceil(consume[t]); const pp=px(st,t); if(pp)costP1+=q*pp.sell; else okP1=false; });
+  let costP0=0,okP0=true; p0.forEach(t=>{ const q=Math.ceil(consume[t]); const pp=px(st,t); if(pp)costP0+=q*pp.sell; else okP0=false; });
+  return { rev:r.out*p.buy, costP1:okP1?costP1:null, costP0:okP0?costP0:null, out:r.out, ct:r.ct }; }
+async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I make? <span class="hint" style="font-weight:400">· profit ranking</span>'; $('closest').innerHTML=''; $('resHead').innerHTML='';
+  const tierSel=`<select id="mkTier" style="width:auto">${[1,2,3,4].map(t=>`<option value="${t}" ${t===makeTier?'selected':''}>P${t}</option>`).join('')}</select>`;
+  const hubSel=`<select id="mkHub" style="width:auto">${HUBS.map(([nm,st])=>`<option value="${st}" ${st===buyHub?'selected':''}>${nm}</option>`).join('')}</select>`;
+  const prods=Object.keys(PI.recipe).filter(o=>PI.tier[o]===makeTier);
+  // ensure prices: products + their P1/P0 inputs
+  const idset=new Set(); prods.forEach(o=>chainTypeIds(o).forEach(t=>idset.add(t)));
+  const haveAll=[...idset].every(t=>px(buyHub,t)!==null && px(buyHub,t)!==undefined);
+  $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center" class="hint">Tier ${tierSel} · Hub ${hubSel} · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''}</div>
+    <div class="hint" style="padding:0 14px 6px">Ranked by profit per Advanced/Basic facility-hour (Buy-inputs strategy). Revenue = sell to buy orders at ${hubName(buyHub)}; pre-tax.</div>
+    <div id="mkBody"></div></td></tr>`;
+  $('mkTier').onchange=e=>{ makeTier=+e.target.value; renderMake(); };
+  $('mkHub').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderMake(); };
+  $('mkReload').onclick=async()=>{ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); };
+  // compute rows
+  const rows=prods.map(o=>{ const e=unitEconomics(o,buyHub); if(!e) return {o,na:true};
+    const inCost = e.costP1!=null?e.costP1:e.costP0; const profitRun = (inCost!=null)? e.rev-inCost : null;
+    const perHrFac = profitRun!=null ? profitRun*(3600/e.ct) : null; // one facility: out per ct
+    const margin = (inCost!=null && e.rev>0)? (e.rev-inCost)/e.rev : null;
+    return {o,profitRun,perHrFac,margin,rev:e.rev,inCost}; })
+    .sort((a,b)=> (b.perHrFac??-1e30)-(a.perHrFac??-1e30));
+  const body = rows.map(r=>{ if(r.na) return '';
+    const pf=r.perHrFac; const col=pf==null?'var(--muted2)':(pf>=0?'var(--green)':'var(--red)');
+    return `<tr class="row" data-o="${r.o}"><td style="padding:4px 14px">${PI.recipe[r.o].name}</td>
+      <td class="r mono" style="color:var(--cyan)">${r.rev?fmtIsk(r.rev/PI.recipe[r.o].out):'—'}</td>
+      <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inCost/PI.recipe[r.o].out):'—'}</td>
+      <td class="r mono" style="color:${col};font-weight:600">${pf!=null?fmtIsk(pf):'—'}</td>
+      <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`; }).join('');
+  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th>sell/unit</th><th>inputs/unit</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
+  $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
+  if(!haveAll && !pricesLoading){ /* auto-load once */ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); }
 }
 
 // ---------- canvas starmap ----------
