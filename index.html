@@ -229,7 +229,7 @@ function colonyPlan(target,sysId){
     cap: charSkills[id]?1+charSkills[id].ic:1+icOverride, bud: charSkills[id]?CCU_BUDGET[charSkills[id].ccu]:[cpuB0,pgB0] }));
   const extractors=crew.filter(c=>c.role==='extract'), factories=crew.filter(c=>c.role==='factory');
   // sequential picker: fill each character to their planet cap before moving on
-  const mkPick=list=>{ let idx=0,cnt=0; return ()=>{ while(idx<list.length){ const c=list[idx]; if(cnt<c.cap){cnt++;return c;} idx++;cnt=0; } return {bud:[cpuB0,pgB0],name:null}; }; };
+  const mkPick=list=>{ let idx=0,cnt=0; return ()=>{ while(idx<list.length){ const c=list[idx]; if(cnt<c.cap){cnt++;return c;} idx++;cnt=0; } return {bud:[cpuB0,pgB0],name:null,id:null}; }; };
   const nextExtractor = roleMode&&extractors.length ? mkPick(extractors) : null;
   const nextFactory   = roleMode&&factories.length ? mkPick(factories)   : null;
   const used={};
@@ -237,10 +237,10 @@ function colonyPlan(target,sysId){
   const planets=[]; const unassigned=[];
   const packFac=(rem,kind,getCrew)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic; const fname=kind==='adv'?'Advanced':'Basic';
     const sub=kind==='adv'?'Process P2+':'Import P0 → P1';
-    while(rem.length){ const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null}; const [cpuB,pgB]=cw.bud; const code=anyType();
+    while(rem.length){ const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud; const code=anyType();
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && cpu+fac.cpu<=cpuB && pg+fac.pg<=pgB && made.length<10){ made.push(rem.shift()); cpu+=fac.cpu; pg+=fac.pg; }
-      planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name,
+      planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id,
         fac:`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}<br>1× Launchpad · 1× Storage Facility`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>40) break; } };
@@ -256,11 +256,11 @@ function colonyPlan(target,sysId){
     for(const p of p0){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]);
       let pick=null; for(const c of codes){ if((used[c]||0)<have[c]){ pick=c; break; } }
       if(!pick){ unassigned.push(p); continue; } used[pick]=(used[pick]||0)+1;
-      const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null}; const [cpuB,pgB]=cw.bud;
+      const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
       const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
       let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<8){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
-      planets.push({title:`${PNAME2[pick]}`, sub:'Extraction + P1', who:cw.name,
+      planets.push({title:`${PNAME2[pick]}`, sub:'Extraction + P1', who:cw.name, whoId:cw.id,
         fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
     packFac(advOuts.slice(),'adv',nextFactory);
@@ -280,6 +280,7 @@ let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; l
 let charSkills={}; // id -> {ic,ccu} per character (from ESI)
 let charRole=JSON.parse(localStorage.getItem('pi_roles')||'{}'); // id -> 'extract' | 'factory'
 function saveRoles(){ localStorage.setItem('pi_roles',JSON.stringify(charRole)); }
+let crewFilter='all'; // colony-plan view filter: 'all' or a character id
 function setRole(id,r){ charRole[id]=r; saveRoles(); if(viewing==='colony'&&chosen&&target) renderColony(); }
 
 // ---------- product list ----------
@@ -518,18 +519,28 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       <span class="rolebtn" data-id="${c.id}" data-r="factory" style="cursor:pointer;font-family:var(--mono);font-size:10px;padding:3px 8px;border:1px solid ${c.role==='factory'?'var(--gold-dim)':'var(--line2)'};color:${c.role==='factory'?'var(--gold-bright)':'var(--muted)'};background:${c.role==='factory'?'rgba(201,168,104,.12)':'transparent'}">Factory</span>
     </div>`).join('')}
     ${plan.roleNote?`<div class="hint" style="color:var(--amber);margin-top:4px">${plan.roleNote}</div>`:''}</div>`; }
+  // crew filter (isolate one character's contribution); reset if the filtered char is gone
+  if(crewFilter!=='all' && !plan.crew.some(c=>String(c.id)===String(crewFilter))) crewFilter='all';
+  const filtered = (plan.roleMode && crewFilter!=='all') ? plan.planets.filter(p=>String(p.whoId)===String(crewFilter)) : plan.planets;
+  const fcrew = plan.crew.find(c=>String(c.id)===String(crewFilter));
+  const filterSel = plan.roleMode ? `<span style="display:flex;align-items:center;gap:6px;margin-left:auto">Show <select id="crewSel" style="width:auto">
+      <option value="all" ${crewFilter==='all'?'selected':''}>All crew</option>
+      ${plan.crew.map(c=>`<option value="${c.id}" ${String(crewFilter)===String(c.id)?'selected':''}>${c.name} (${c.role==='extract'?'Extractor':'Factory'})</option>`).join('')}</select></span>` : '';
   let html=`<div style="padding:6px 14px 2px" class="hint">
     Planets available${plan.roleMode?' (crew total)':''}: <b style="color:var(--gold-bright)">${plan.maxPlanets}</b>${plan.roleMode?'':` (Interplanetary Consolidation ${plan.ic})`} ·
     command-center budget <b>CPU ${plan.cpuB} / PG ${plan.pgB}</b> (Command Center Upgrades ${plan.ccu})
     ${loggedIn?'· from your skills':'· assumed — adjust below'}</div>
     ${loggedIn?`<div style="padding:0 14px 6px" class="hint"><span style="color:var(--muted2)">Your PI skills (from ESI):</span><br>${piSkillRows()}</div>`:''}
     ${crewHtml}
-    <div style="padding:0 14px 6px;display:flex;gap:16px;align-items:center" class="hint">
+    <div style="padding:0 14px 6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap" class="hint">
       <span style="display:flex;align-items:center;gap:6px">Interplanetary&nbsp;Consolidation <select id="icSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ic?'selected':''}>${l}</option>`).join('')}</select></span>
-      <span style="display:flex;align-items:center;gap:6px">Command&nbsp;Center&nbsp;Upgrades <select id="ccuSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ccu?'selected':''}>${l}</option>`).join('')}</select></span></div>
-    <div class="hint" style="padding:0 14px 4px">Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; add a character or import some inputs`:''}.</div>`;
-  plan.planets.forEach((p,i)=>{ html+=card(`Planet ${i+1} · ${p.title}`, p.sub, p.fac, p.cpu, p.pg, p.cpuB, p.pgB, p.who); });
-  if(plan.unassigned.length) html+=`<div class="hint" style="color:var(--amber);padding:6px 14px">No planet in this system for: ${plan.unassigned.map(p=>PI.names[p]).join(', ')} — buy these (tick Buy P0) or pick a fuller system.</div>`;
+      <span style="display:flex;align-items:center;gap:6px">Command&nbsp;Center&nbsp;Upgrades <select id="ccuSel" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option ${l===plan.ccu?'selected':''}>${l}</option>`).join('')}</select></span>
+      ${filterSel}</div>
+    <div class="hint" style="padding:0 14px 4px">${(plan.roleMode&&fcrew)
+      ? `<b style="color:var(--cyan-bright)">${fcrew.name}</b> runs <b style="color:${filtered.length>fcrew.cap?'var(--red)':'var(--green)'}">${filtered.length}</b> of their ${fcrew.cap} planets (${fcrew.role==='extract'?'Extractor':'Factory'}).`
+      : `Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; add a character or import some inputs`:''}.`}</div>`;
+  filtered.forEach((p,i)=>{ html+=card(`Planet ${i+1} · ${p.title}`, p.sub, p.fac, p.cpu, p.pg, p.cpuB, p.pgB, p.who); });
+  if(crewFilter==='all' && plan.unassigned.length) html+=`<div class="hint" style="color:var(--amber);padding:6px 14px">No planet in this system for: ${plan.unassigned.map(p=>PI.names[p]).join(', ')} — buy these (tick Buy P0) or pick a fuller system.</div>`;
   const modeTag=plan.mode==='buyP1'?'Buying P1 (processed)':plan.mode==='buyP0'?'Buying P0 (raw)':'Self-extracting';
   html+=`<div class="hint" style="padding:6px 14px 12px"><b style="color:var(--cyan)">${modeTag}.</b> ${plan.note}</div>`;
   $('resBody').innerHTML=`<tr><td style="padding:0">${html}</td></tr>`;
@@ -537,6 +548,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   $('icSel').onchange=e=>{ icOverride=+e.target.value; renderColony(); };
   $('ccuSel').onchange=e=>{ ccuOverride=+e.target.value; renderColony(); };
   $('resBody').querySelectorAll('.rolebtn').forEach(b=>b.onclick=()=>setRole(b.dataset.id,b.dataset.r));
+  if($('crewSel')) $('crewSel').onchange=e=>{ crewFilter=e.target.value; renderColony(); };
 }
 
 // ---------- canvas starmap ----------
