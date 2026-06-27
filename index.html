@@ -175,7 +175,7 @@ const APP={ clientId:'2f5f375112e64848ab34261092e6a756', redirect:location.origi
 const cfg=JSON.parse(localStorage.getItem('pi_cfg')||'{}');   // stores UI scale only
 const UI_DEFAULT=150, UI_VER=3; // bump UI_VER to force a new default over any saved value
 if(cfg.uiVer!==UI_VER){ cfg.ui=UI_DEFAULT; cfg.uiVer=UI_VER; localStorage.setItem('pi_cfg',JSON.stringify(cfg)); }
-const SCOPES='publicData esi-planets.manage_planets.v1 esi-location.read_location.v1 esi-skills.read_skills.v1';
+const SCOPES='publicData esi-planets.manage_planets.v1 esi-location.read_location.v1 esi-skills.read_skills.v1 esi-characters.read_standings.v1';
 
 const SYS=UNIVERSE.systems, REG=UNIVERSE.regions, PTN=UNIVERSE.planetTypes;
 const PT_COLOR={T:'#6fd06f',I:'#9fd4e0',G:'#c9a868',O:'#5aa0d0',L:'#d66a5a',B:'#b09060',S:'#b69adf',P:'#e0a040',H:'#888'};
@@ -406,6 +406,31 @@ function saveSel(){ localStorage.setItem('pi_sel',JSON.stringify(sel)); }
 let buyHub=+(localStorage.getItem('pi_hub')||60003760);
 let buyP0=localStorage.getItem('pi_bp0')==='1';
 let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
+// market fees: sales tax (Accounting) + broker fee (Broker Relations) + station-owner standings
+let sellMode=localStorage.getItem('pi_sellmode')||'buy'; // 'buy' = sell to buy orders (tax only); 'sell' = list on sell orders (tax + broker)
+let accOverride=(localStorage.getItem('pi_acc')!=null)?+localStorage.getItem('pi_acc'):null;
+let brOverride =(localStorage.getItem('pi_br') !=null)?+localStorage.getItem('pi_br') :null;
+let charStandings={}; // charId -> { fromId: standing } (unmodified standings, used for broker fee)
+// trade-hub station owners: faction + NPC corp (broker fee uses standing toward these)
+const HUB_OWNERS={
+  60003760:{fac:500001,corp:1000035,name:'Caldari Navy / Caldari State'},      // Jita
+  60008494:{fac:500003,corp:1000084,name:'Emperor Family / Amarr Empire'},     // Amarr
+  60011866:{fac:500004,corp:1000120,name:'Federation Navy / Gallente Federation'}, // Dodixie
+  60004588:{fac:500002,corp:1000080,name:'Brutor Tribe / Minmatar Republic'},  // Rens
+  60005686:{fac:500002,corp:1000064,name:'Boundless Creation / Minmatar Republic'} // Hek
+};
+function bestTrader(){ let best=null; for(const id in charSkills){ const s=charSkills[id]; const score=(s.acc||0)+(s.br||0);
+    if(!best||score>best.score) best={id,name:(chars[id]&&chars[id].name)||('Char '+id),acc:s.acc||0,br:s.br||0,score}; } return best; }
+function feeRates(){ const bt=bestTrader();
+  const acc=(accOverride!=null?accOverride:(bt?bt.acc:0)), br=(brOverride!=null?brOverride:(bt?bt.br:0));
+  const salesTax=0.075*(1-0.11*acc);
+  const own=HUB_OWNERS[buyHub]; let fs=0,cs=0,stOk=false;
+  if(bt && charStandings[bt.id] && own){ const st=charStandings[bt.id];
+    fs=Math.max(-10,Math.min(10, st[own.fac]||0)); cs=Math.max(-10,Math.min(10, st[own.corp]||0));
+    stOk=(st[own.fac]!=null)||(st[own.corp]!=null); }
+  let broker=Math.max(0.01, 0.03-0.003*br-0.0003*fs-0.0002*cs);
+  const total=salesTax+(sellMode==='sell'?broker:0);
+  return {acc,br,salesTax,broker,total,who:bt?bt.name:null,fs,cs,stOk,owner:own?own.name:null}; }
 
 function renderReq(){ if(!target){ $('req').innerHTML=''; return; }
   const p0=p0NeedsFor(target); const codes={}; p0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>codes[c]=1));
@@ -426,9 +451,18 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   // weekly revenue: sell finished products to buy orders at chosen hub
   let revenue=0, revPriced=true;
   pids.forEach(pid=>{ const p=px(buyHub,pid); if(p) revenue+=Math.max(1,sel[pid])*p.buy; else revPriced=false; });
+  const fees=feeRates(); const netRev=revenue*(1-fees.total);
   const c0=listCost(p0items,buyHub), c1=listCost(p1items,buyHub);
   const c0ok=p0items.length>0&&p0items.every(([t])=>px(buyHub,t));
   const c1ok=p1items.length>0&&p1items.every(([t])=>px(buyHub,t));
+  const lvlSel=(id,val)=>`<select id="${id}" style="width:auto">${[0,1,2,3,4,5].map(l=>`<option value="${l}" ${l===val?'selected':''}>${l}</option>`).join('')}</select>`;
+  const manual=(accOverride!=null||brOverride!=null);
+  const feeSrc = manual?`manual levels`:(fees.who?`from <b style="color:var(--cyan-bright)">${fees.who}</b>`:`base rates (no character)`);
+  const feeCtl=`<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0 2px" class="hint">
+      <span style="display:flex;align-items:center;gap:5px">Sell via <select id="sellMode" style="width:auto"><option value="buy" ${sellMode==='buy'?'selected':''}>Buy orders (instant)</option><option value="sell" ${sellMode==='sell'?'selected':''}>Sell orders (listed)</option></select></span>
+      <span style="display:flex;align-items:center;gap:5px" title="Accounting skill — reduces sales tax 11%/level">Acct ${lvlSel('accSel',fees.acc)}</span>
+      <span style="display:flex;align-items:center;gap:5px" title="Broker Relations skill — reduces broker fee 0.3%/level">Broker ${lvlSel('brSel',fees.br)}</span></div>
+    <div class="hint" style="margin:0 0 6px;color:var(--muted2)">Fees ${feeSrc}: sales tax <b>${(fees.salesTax*100).toFixed(2)}%</b>${sellMode==='sell'?` + broker <b>${(fees.broker*100).toFixed(2)}%</b>`:''} = <b style="color:var(--amber)">${(fees.total*100).toFixed(2)}%</b> off sell revenue${sellMode==='buy'?' (selling to buy orders pays no broker fee)':''}.${(sellMode==='sell'&&fees.owner)?`<br>Broker standing to <b>${fees.owner}</b>: ${fees.stOk?`faction <b>${fees.fs.toFixed(2)}</b> / corp <b>${fees.cs.toFixed(2)}</b>${fees.who?` (${fees.who})`:''}`:'<span style="color:var(--amber)">none loaded — re-authorize to read standings</span>'}`:''}</div>`;
   const hubSel=`<select id="hubSel" style="width:auto">${HUBS.map(([nm,st])=>`<option value="${st}" ${st===buyHub?'selected':''}>${nm}</option>`).join('')}</select>`;
   const basket=pids.slice().sort((a,b)=>PI.recipe[a].name.localeCompare(PI.recipe[b].name)).map(pid=>{ const p=px(buyHub,pid);
     return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
@@ -436,11 +470,11 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
       <input type="number" min="1" class="qIn" data-o="${pid}" value="${Math.max(1,sel[pid])}" style="width:68px">
       <span class="mono hint" style="width:60px;text-align:right" title="unit buy price at ${hubName(buyHub)}">${p?fmtIsk(p.buy):(pricesLoading?'…':'—')}</span>
       <span class="prm" data-o="${pid}" style="cursor:pointer;color:var(--red);padding:0 2px" title="remove">×</span></div>`; }).join('');
-  const pl=(label,cost,ok,sel0)=>{ const profit=revenue-cost; const show=revPriced&&ok;
+  const pl=(label,cost,ok,sel0)=>{ const profit=netRev-cost; const show=revPriced&&ok;
     return `<tr style="${sel0?'background:rgba(201,168,104,.08)':''}">
       <td style="padding:2px 8px 2px 0">${label}</td>
       <td class="mono" style="text-align:right;color:var(--muted)">${cost===0?'0':(ok?fmtIsk(cost):'—')}</td>
-      <td class="mono" style="text-align:right;color:var(--cyan)">${revPriced?fmtIsk(revenue):'—'}</td>
+      <td class="mono" style="text-align:right;color:var(--cyan)" title="${revPriced?'gross '+fmtIsk(revenue)+' − '+(fees.total*100).toFixed(2)+'% fees':''}">${revPriced?fmtIsk(netRev):'—'}</td>
       <td class="mono" style="text-align:right;font-weight:600;color:${show?(profit>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${show?fmtIsk(profit):'—'}</td></tr>`; };
   const hubcmp=HUBS.map(([nm,st])=>{ let v=0,ok=true; pids.forEach(pid=>{const p=px(st,pid); if(p)v+=Math.max(1,sel[pid])*p.buy; else ok=false;});
     return `<tr><td style="padding:1px 10px 1px 0">${nm}</td><td class="mono" style="text-align:right;color:${st===buyHub?'var(--gold-bright)':'var(--cyan)'}">${ok?fmtIsk(v):(pricesLoading?'…':'—')}</td></tr>`; }).join('');
@@ -462,22 +496,26 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
       <label style="cursor:pointer"><input type="checkbox" id="cbP0" ${buyP0?'checked':''}> Buy P0 (raw)</label>
       <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label></div>
     <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:8px 0 3px">WEEKLY PROFIT / LOSS · WHOLE BASKET</div>
+    ${feeCtl}
     <table class="mono" style="font-size:11px;border-collapse:collapse;width:100%">
-      <tr class="hint"><td style="padding-right:8px">strategy</td><td style="text-align:right">inputs</td><td style="text-align:right">revenue</td><td style="text-align:right">profit</td></tr>
+      <tr class="hint"><td style="padding-right:8px">strategy</td><td style="text-align:right">inputs</td><td style="text-align:right">net revenue</td><td style="text-align:right">profit</td></tr>
       ${pl('Self-extract',0,true,!buyP0&&!buyP1)}${pl('Buy P0',c0,c0ok,buyP0&&!buyP1)}${pl('Buy P1',c1,c1ok,buyP1)}</table>
-    <div class="hint" style="margin:3px 0 6px;color:var(--muted2)">Revenue = sell finished goods to buy orders at ${hubName(buyHub)}; pre-tax, excludes build time / POCO tax.</div>
+    <div class="hint" style="margin:3px 0 6px;color:var(--muted2)">Net revenue = sell finished goods at ${hubName(buyHub)} less market fees above; excludes build time / POCO tax.</div>
     ${buyP0?sec('P0 shopping list',p0items,'p0',c0,c0ok):''}
     ${buyP1?sec('P1 shopping list',p1items,'p1',c1,c1ok):''}
     ${!buyP0&&!buyP1?'<div class="hint" style="color:var(--muted2)">Tick Buy P0 or Buy P1 for a copy-paste EVE multibuy list.</div>':''}
     <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:12px 0 3px">BASKET VALUE BY HUB (sell-to-buy)</div>
     <table class="mono" style="font-size:11px;border-collapse:collapse">${hubcmp}</table>`;
   $('hubSel').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderProcure(); };
+  $('sellMode').onchange=e=>{ sellMode=e.target.value; localStorage.setItem('pi_sellmode',sellMode); renderProcure(); if(viewing==='make') renderMake(); };
+  $('accSel').onchange=e=>{ accOverride=+e.target.value; localStorage.setItem('pi_acc',accOverride); renderProcure(); if(viewing==='make') renderMake(); };
+  $('brSel').onchange=e=>{ brOverride=+e.target.value; localStorage.setItem('pi_br',brOverride); renderProcure(); if(viewing==='make') renderMake(); };
   $('reloadPx').onclick=reloadPrices;
   $('clrSel').onclick=()=>{ sel={}; target=null; saveSel(); buildProducts(); renderReq(); compute(); fitSide(); };
   box.querySelectorAll('.qIn').forEach(q=>q.onchange=()=>{ const o=q.dataset.o; sel[o]=Math.max(1,+q.value||1); lastQty=sel[o]; localStorage.setItem('pi_weekly',lastQty); saveSel(); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); });
   box.querySelectorAll('.prm').forEach(x=>x.onclick=()=>toggleProduct(x.dataset.o));
-  $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); };
-  $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); };
+  $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
+  $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
   box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
     const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
     try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
@@ -670,27 +708,36 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
   // ensure prices: products + their P1/P0 inputs
   const idset=new Set(); prods.forEach(o=>chainTypeIds(o).forEach(t=>idset.add(t)));
   const haveAll=[...idset].every(t=>px(buyHub,t)!==null && px(buyHub,t)!==undefined);
-  $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center" class="hint">Tier ${tierSel} · Hub ${hubSel} · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''}</div>
-    <div class="hint" style="padding:0 14px 6px">Ranked by profit per Advanced/Basic facility-hour (Buy-inputs strategy). Revenue = sell to buy orders at ${hubName(buyHub)}; pre-tax.</div>
+  const basis = buyP1?'P1':(buyP0?'P0':'extract');
+  const basisLbl = basis==='P1'?'Buy P1 inputs':basis==='P0'?'Buy raw P0':'Self-extract (no input cost)';
+  const inHdr = basis==='P1'?'P1 cost/unit':basis==='P0'?'P0 cost/unit':'inputs/unit';
+  const fees=feeRates(); const feeMul=1-fees.total;
+  const feeSrc=(accOverride!=null||brOverride!=null)?'manual levels':(fees.who?`${fees.who}`:'base rates');
+  $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap" class="hint">Tier ${tierSel} · Hub ${hubSel} · <label style="cursor:pointer"><input type="checkbox" id="mkP0" ${buyP0?'checked':''}> Buy P0</label> <label style="cursor:pointer"><input type="checkbox" id="mkP1" ${buyP1?'checked':''}> Buy P1</label> · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''}</div>
+    <div class="hint" style="padding:0 14px 6px">Cost basis: <b style="color:var(--gold-bright)">${basisLbl}</b> · revenue net of fees (<b style="color:var(--amber)">${(fees.total*100).toFixed(2)}%</b> · ${feeSrc}) selling via ${sellMode==='sell'?'sell orders':'buy orders'} at ${hubName(buyHub)}. Ranked by profit per facility-hour; pre build-time.</div>
     <div id="mkBody"></div></td></tr>`;
   $('mkTier').onchange=e=>{ makeTier=+e.target.value; renderMake(); };
   $('mkHub').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderMake(); };
+  $('mkP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderMake(); };
+  $('mkP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderMake(); };
   $('mkReload').onclick=async()=>{ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); };
-  // compute rows
+  // compute rows — input cost follows the selected buy strategy
   const rows=prods.map(o=>{ const e=unitEconomics(o,buyHub); if(!e) return {o,na:true};
-    const inCost = e.costP1!=null?e.costP1:e.costP0; const profitRun = (inCost!=null)? e.rev-inCost : null;
+    const rev=e.rev*feeMul; // net of market fees
+    const inCost = basis==='P1'?e.costP1 : basis==='P0'?e.costP0 : 0;
+    const profitRun = (inCost!=null)? rev-inCost : null;
     const perHrFac = profitRun!=null ? profitRun*(3600/e.ct) : null; // one facility: out per ct
-    const margin = (inCost!=null && e.rev>0)? (e.rev-inCost)/e.rev : null;
-    return {o,profitRun,perHrFac,margin,rev:e.rev,inCost}; })
+    const margin = (inCost!=null && rev>0)? (rev-inCost)/rev : null;
+    return {o,profitRun,perHrFac,margin,rev,inCost}; })
     .sort((a,b)=> (b.perHrFac??-1e30)-(a.perHrFac??-1e30));
   const body = rows.map(r=>{ if(r.na) return '';
     const pf=r.perHrFac; const col=pf==null?'var(--muted2)':(pf>=0?'var(--green)':'var(--red)');
     return `<tr class="row" data-o="${r.o}"><td style="padding:4px 14px">${PI.recipe[r.o].name}</td>
       <td class="r mono" style="color:var(--cyan)">${r.rev?fmtIsk(r.rev/PI.recipe[r.o].out):'—'}</td>
-      <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inCost/PI.recipe[r.o].out):'—'}</td>
+      <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inCost/PI.recipe[r.o].out):(basis==='extract'?'0':'—')}</td>
       <td class="r mono" style="color:${col};font-weight:600">${pf!=null?fmtIsk(pf):'—'}</td>
       <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`; }).join('');
-  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th>sell/unit</th><th>inputs/unit</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
+  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th>sell/unit</th><th>${inHdr}</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
   $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
   if(!haveAll && !pricesLoading){ /* auto-load once */ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); }
 }
@@ -743,10 +790,14 @@ cv.addEventListener('pointerup',e=>{ dn=false; if(dragged||!pts.length)return; c
 function flashSystem(id){ chosen=id; drawMap(); }
 async function loadSkills(id){ try{ const sk=await eGet(id,`/characters/${id}/skills/`);
     const m={}; (sk.skills||[]).forEach(s=>{ m[s.skill_id]=s.trained_skill_level; skillMap[s.skill_id]=Math.max(skillMap[s.skill_id]||0,s.trained_skill_level); });
-    charSkills[id]={ ic:m[2495]||0, ccu:m[2505]||0 };
+    charSkills[id]={ ic:m[2495]||0, ccu:m[2505]||0, acc:m[16622]||0, br:m[3446]||0 };
     if(skillMap[2495]!=null) icOverride=skillMap[2495]; if(skillMap[2505]!=null) ccuOverride=skillMap[2505];
     if(viewing==='colony'&&chosen&&target) renderColony();
   }catch(e){} }
+async function loadStandings(id){ try{ const list=await eGet(id,`/characters/${id}/standings/`);
+    const m={}; (list||[]).forEach(s=>{ m[s.from_id]=s.standing; }); charStandings[id]=m;
+    if(viewing==='make') renderMake(); else renderProcure();
+  }catch(e){ /* scope may be missing until re-auth */ } }
 
 // ---------- filters ----------
 $('secChips').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ $('secChips').querySelectorAll('.chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); secFilter=c.dataset.s; compute(); });
@@ -811,7 +862,7 @@ buildTiers(); buildProducts(); renderResults(); renderAuth();
 // restore a saved basket: focus the first selected product, show its tier, and load prices/shopping list
 (function(){ const k=Object.keys(sel); if(k.length){ target=k[0]; if(PI.tier[target]) { tier=PI.tier[target]; buildTiers(); } buildProducts(); renderReq(); compute(); loadHubPrices(); } else { renderProcure(); } })();
 (async()=>{ await handleRedirect(); renderAuth();
-  for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); }
+  for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); await loadStandings(+id); }
   if(!$('home').value){ const sys=Object.values(charLoc).find(s=>SYS[s]); if(sys){ $('home').value=SYS[sys][0]; if(target) compute(); } }
   renderAuth(); })();
 </script>
