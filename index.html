@@ -247,9 +247,11 @@ function chainTiers(target){ // returns ordered list of schematic outputs in the
   return list.sort((a,b)=>PI.tier[a]-PI.tier[b]); }
 function colonyPlan(target,sysId){
   const have=SYS[sysId][5];
-  const p0=[...p0NeedsFor(target)];
-  const p1Outs=chainTiers(target).filter(o=>PI.tier[o]==1);
-  const advOuts=chainTiers(target).filter(o=>PI.tier[o]>=2);
+  // products this colony builds: the focus target, or the whole basket when 'all products' is toggled
+  const planProds = (allProducts && Object.keys(sel).length) ? Object.keys(sel) : [String(target)];
+  const _p0=new Set(), _p1=new Set(), _adv=new Set();
+  planProds.forEach(t=>{ p0NeedsFor(t).forEach(p=>_p0.add(p)); chainTiers(t).forEach(o=>{ if(PI.tier[o]==1)_p1.add(o); else if(PI.tier[o]>=2)_adv.add(o); }); });
+  const p0=[..._p0]; const p1Outs=[..._p1]; const advOuts=[..._adv];
   const [cpuB0,pgB0]=CCU_BUDGET[ccuOverride];   // fallback budget (single-char / overflow)
   // crew: role-based assignment kicks in with 2+ logged-in characters
   const ids=Object.keys(chars);
@@ -318,12 +320,13 @@ function colonyPlan(target,sysId){
   // full-role characters: each runs their own complete colony for an assigned product
   fulls.forEach(c=>{ const prod=(charProduct[c.id]&&PI.recipe[charProduct[c.id]])?charProduct[c.id]:(sel[target]!=null?target:Object.keys(sel)[0]||target);
     const [cb,pb]=c.bud; planets.push(...chainPlanets(prod,cb,pb,`${c.name} · ${PI.recipe[prod]?PI.recipe[prod].name:''} (full)`,c.id)); });
+  if(planProds.length>1) note=`Building all ${planProds.length} basket products in one colony setup. `+note;
   const maxPlanets = roleMode ? crew.filter(c=>c.role!=='notreq').reduce((s,c)=>s+c.cap,0) : (1+icOverride);
   let roleNote='';
   if(roleMode && buildShared){ const hasFactory=advOuts.length>0, hasExtractWork=(mode==='extract');
     if(hasFactory&&!factories.length&&!fulls.length) roleNote+=' No character is set to Factory — set one so someone runs the Advanced facilities (or use Full).';
     if(hasExtractWork&&!extractors.length&&!fulls.length) roleNote+=' No character is set to Extractor.'; }
-  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote};
+  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length};
 }
 
 // ---------- state ----------
@@ -338,6 +341,7 @@ function setCharProduct(id,pid){ charProduct[id]=pid; saveCharProd(); if(viewing
 function saveRoles(){ localStorage.setItem('pi_roles',JSON.stringify(charRole)); }
 let crewFilter='all'; // colony-plan view filter: 'all' or a character id
 let autoFit=localStorage.getItem('pi_autofit')!=='0'; // auto-mark surplus characters 'not required'
+let allProducts=localStorage.getItem('pi_allprod')==='1'; // build the whole basket in one colony setup
 let _autofitting=false;
 function setRole(id,r){ charRole[id]=r; saveRoles(); if(viewing==='colony'&&chosen&&target) renderColony(); }
 // mark characters that the plan doesn't actually use as 'not required', so you run the colony with the fewest pilots.
@@ -651,9 +655,11 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   if(crewFilter!=='all' && !plan.crew.some(c=>String(c.id)===String(crewFilter))) crewFilter='all';
   const filtered = (plan.roleMode && crewFilter!=='all') ? plan.planets.filter(p=>String(p.whoId)===String(crewFilter)) : plan.planets;
   const fcrew = plan.crew.find(c=>String(c.id)===String(crewFilter));
-  const filterSel = plan.roleMode ? `<span style="display:flex;align-items:center;gap:6px;margin-left:auto">Show <select id="crewSel" style="width:auto">
+  const multiSelN=Object.keys(sel).length;
+  const allChk = multiSelN>1 ? `<label style="display:flex;align-items:center;gap:5px;cursor:pointer" title="Build every selected product in this one colony setup (instead of just the focused product)"><input type="checkbox" id="allProd" ${allProducts?'checked':''}> all products</label>` : '';
+  const filterSel = (plan.roleMode||allChk) ? `<span style="display:flex;align-items:center;gap:12px;margin-left:auto">${allChk}${plan.roleMode?`<span style="display:flex;align-items:center;gap:6px">Show <select id="crewSel" style="width:auto">
       <option value="all" ${crewFilter==='all'?'selected':''}>All crew</option>
-      ${plan.crew.map(c=>`<option value="${c.id}" ${String(crewFilter)===String(c.id)?'selected':''}>${c.name} (${c.role==='extract'?'Extractor':c.role==='factory'?'Factory':'Full'})</option>`).join('')}</select></span>` : '';
+      ${plan.crew.map(c=>`<option value="${c.id}" ${String(crewFilter)===String(c.id)?'selected':''}>${c.name} (${c.role==='extract'?'Extractor':c.role==='factory'?'Factory':c.role==='full'?'Full':'Not req'})</option>`).join('')}</select></span>`:''}</span>` : '';
   let html=`<div style="padding:6px 14px 2px" class="hint">
     Planets available${plan.roleMode?' (crew total)':''}: <b style="color:var(--gold-bright)">${plan.maxPlanets}</b>${plan.roleMode?'':` (Interplanetary Consolidation ${plan.ic})`} ·
     command-center budget <b>CPU ${plan.cpuB} / PG ${plan.pgB}</b> (Command Center Upgrades ${plan.ccu})
@@ -683,6 +689,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   if($('autoFit')) $('autoFit').onchange=e=>{ autoFit=e.target.checked; localStorage.setItem('pi_autofit',autoFit?'1':'0'); renderColony(); };
   $('resBody').querySelectorAll('.cprod').forEach(s=>s.onchange=()=>setCharProduct(s.dataset.id, s.value));
   if($('crewSel')) $('crewSel').onchange=e=>{ crewFilter=e.target.value; renderColony(); };
+  if($('allProd')) $('allProd').onchange=e=>{ allProducts=e.target.checked; localStorage.setItem('pi_allprod',allProducts?'1':'0'); renderColony(); };
   if($('sugSys')) $('sugSys').onclick=()=>selectSystem(+$('sugSys').dataset.id);
   renderNav();
 }
