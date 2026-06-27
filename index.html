@@ -196,10 +196,10 @@ function bfs(home){ if(!home) return {}; if(_bfsCache[home]) return _bfsCache[ho
 function basketP0(){ const out=new Set(); const pids=Object.keys(sel); const src=pids.length?pids:(target?[String(target)]:[]);
   src.forEach(pid=>p0NeedsFor(pid).forEach(p=>out.add(p))); return [...out]; }
 // nearest system to fromId (fewest jumps) that supplies the most of the missing planet types
-function nearestForMissing(fromId, missingP0){
+function nearestForMissing(fromId, missingP0, region){
   const need=new Set(); missingP0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>need.add(c)));
   if(!need.size) return null; const dist=bfs(fromId); let best=null;
-  for(const id of sysIds){ if(id===fromId) continue; const j=dist[id]; if(j===undefined) continue;
+  for(const id of sysIds){ if(id===fromId) continue; if(region!=null && SYS[id][2]!==region) continue; const j=dist[id]; if(j===undefined) continue;
     const have=SYS[id][5]; let covers=0; const got=[]; need.forEach(c=>{ if(have[c]){ covers++; got.push(c); } });
     if(!covers) continue;
     if(!best || covers>best.covers || (covers===best.covers && j<best.jumps)) best={id,jumps:j,covers,got};
@@ -217,9 +217,11 @@ function feederPlan(fromId, missingP0, maxFeeders){ maxFeeders=maxFeeders||3;
       if(!best || got.length>best.got.length || (got.length===best.got.length && j<best.jumps)) best={id,jumps:j,got}; }
     if(!best) break; feeders.push(best); best.got.forEach(c=>need.delete(c)); }
   return feeders; }
-// for each missing planet-type code, the jumps from fromId to the nearest system that has it
-function codeDistances(fromId, codes){ const dist=bfs(fromId);
-  return codes.map(c=>{ let bj=Infinity; for(const id of sysIds){ if(SYS[id][5][c]!==undefined){ const j=dist[id]; if(j!==undefined&&j<bj){ bj=j; if(bj===1)break; } } } return {code:c,jumps:bj===Infinity?null:bj}; }); }
+// for each missing planet-type code, the nearest system (optionally restricted to a region) from fromId that has it
+function codeDistances(fromId, codes, region){ const dist=bfs(fromId);
+  return codes.map(c=>{ let bj=Infinity,bid=null; for(const id of sysIds){ if(region!=null && SYS[id][2]!==region) continue;
+      if(SYS[id][5][c]!==undefined){ const j=dist[id]; if(j!==undefined&&j<bj){ bj=j; bid=id; if(bj===1)break; } } }
+    return {code:c, jumps:bj===Infinity?null:bj, sysId:bid}; }); }
 
 // ---------- PI colony layout (SDE-accurate CPU/PG) ----------
 // command-center budget [CPU,PG] by Command Center Upgrades level (base from SDE: 1675/6000)
@@ -564,15 +566,21 @@ function compute(){ const p0=basketP0(); if(!p0.length){ results=[]; closestSys=
   }
   cand.sort((a,b)=> b.covered-a.covered || (a.jumps??1e9)-(b.jumps??1e9) || b.sec-a.sec );
   results=cand.slice(0,300);
-  // up to 3 recommended main systems: most needed planet types, nearest to home/staging; plus distance to each missing type
+  // up to 3 recommended main systems — kept in the home/staging region; missing planet types are sourced
+  // from the nearest same-region systems to home (they need not be in one system, just close by).
   const neededCodes=new Set(); p0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
+  const homeRegion = homeId&&SYS[homeId] ? SYS[homeId][2] : null;
+  let pool=cand, regionScoped=false;
+  if(homeRegion!=null){ const inR=cand.filter(c=>SYS[c.id][2]===homeRegion); if(inR.length){ pool=inR; regionScoped=true; } }
+  const sugRegion = regionScoped ? homeRegion : null;
+  const sugOrigin = homeId || (pool[0]&&pool[0].id);
   baseSuggest=[];
-  for(const b of cand.slice(0,3)){
+  for(const b of pool.slice(0,3)){
     const miss=[...neededCodes].filter(c=>!b.have[c]);
-    baseSuggest.push({id:b.id, covered:b.covered, total:b.total, jumps:b.jumps,
-      missCodes:miss, dists: miss.length?codeDistances(b.id, miss):[]});
+    baseSuggest.push({id:b.id, covered:b.covered, total:b.total, jumps:b.jumps, region:SYS[b.id][2],
+      missCodes:miss, dists: miss.length?codeDistances(sugOrigin, miss, sugRegion):[]});
   }
-  closestSys=baseSuggest[0]||null;
+  closestSys=baseSuggest[0]||null; window._sugRegionScoped=regionScoped;
   renderResults(); drawMap();
   if(viewing==='colony'&&chosen&&target) renderColony(); }
 
@@ -586,23 +594,24 @@ function renderResults(){
   const jtxt=j=>j==null?'—':j+'j';
   const sugBlock = (baseSuggest.length&&basket.length) ? `<tr><td colspan="6" style="padding:0">
     <div style="margin:8px 14px;border:1px solid var(--line2);background:rgba(122,184,200,.04)">
-      <div class="mono" style="font-size:10px;letter-spacing:.12em;color:var(--gold);padding:7px 10px 3px">SUGGESTED MAIN SYSTEMS · from ${homeId&&SYS[homeId]?SYS[homeId][0]:'(set home/staging)'}</div>
+      <div class="mono" style="font-size:10px;letter-spacing:.12em;color:var(--gold);padding:7px 10px 3px">SUGGESTED MAIN SYSTEMS · ${homeId&&SYS[homeId]?`${SYS[homeId][0]} region (${REG[SYS[homeId][2]]||'?'})`:'set home/staging for region focus'}</div>
       ${baseSuggest.map((b,i)=>{ const s=SYS[b.id]; const full=b.covered===b.total;
-        const miss = full?`<span style="color:var(--green)">covers all ${b.total} types</span>`
-          : `<span style="color:var(--muted2)">missing</span> ${b.dists.map(d=>`<span class="mono" style="color:${PT_COLOR[d.code]}">${d.code}</span><span class="mono" style="color:${d.jumps==null?'var(--red)':'var(--amber)'}">→${d.jumps==null?'n/a':d.jumps+'j'}</span>`).join(' · ')}`;
-        return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 10px;border-top:1px solid var(--line)">
-          <span class="csys" data-id="${b.id}" style="cursor:pointer;color:${i===0?'var(--cyan-bright)':'var(--cyan)'};min-width:150px"><b>${i+1}. ${s[0]}</b> <span class="hint">${REG[s[2]]||''}</span></span>
+        const miss = full?`<span style="color:var(--green)">covers all ${b.total} types in-system</span>`
+          : `<span style="color:var(--muted2)">missing</span> ${b.dists.map(d=>`<span class="mono" style="color:${PT_COLOR[d.code]}">${d.code}</span>${d.sysId!=null?`<span class="csys mono" data-id="${d.sysId}" style="cursor:pointer;color:var(--cyan)" title="${SYS[d.sysId][0]} — nearest in-region source"> →${SYS[d.sysId][0]} ${d.jumps}j</span>`:`<span class="mono" style="color:var(--red)"> →not in region</span>`}`).join(' · ')}`;
+        return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 10px;border-top:1px solid var(--line);flex-wrap:wrap">
+          <span class="csys" data-id="${b.id}" style="cursor:pointer;color:${i===0?'var(--cyan-bright)':'var(--cyan)'};min-width:150px"><b>${i+1}. ${safeKind(b.id)==='sov'?'<span style="color:var(--green)" title="your sovereignty — safe">⛊</span> ':''}${s[0]}</b> <span class="hint">${REG[s[2]]||''}</span></span>
           <span class="mono" style="color:${b.covered===b.total?'var(--green)':'var(--gold-bright)'}">${b.covered}/${b.total}</span>
-          <span class="mono hint">${jtxt(b.jumps)} from home</span>
-          <span style="flex:1;font-size:11px">${miss}</span></div>`; }).join('')}
-      <div class="hint" style="padding:3px 10px 7px;color:var(--muted2)">Distances show the nearest system supplying each missing planet type (jumps from that base). Click a system to plan its colony.</div>
+          <span class="mono hint">${b.jumps==null?'—':b.jumps+'j'} from home</span>
+          <span style="flex:1;font-size:11px;min-width:200px">${miss}</span></div>`; }).join('')}
+      <div class="hint" style="padding:3px 10px 7px;color:var(--muted2)">${window._sugRegionScoped?'Kept within your home region':'Set a home/staging system to focus suggestions on one region'} — missing planet types are sourced from the nearest same-region systems (need not be one system). Click any system to plan it.</div>
     </div></td></tr>` : '';
   $('resHead').innerHTML = `<tr><th>System</th><th>Region</th><th class="r">Sec</th><th>Planets (needed types)</th><th class="r">Coverage</th>${homeId?'<th class="r">Jumps</th>':''}</tr>`;
   if(!basket.length){ $('resBody').innerHTML=`<tr><td colspan="6"><div class="hint" style="padding:8px 0">Select one or more target products to locate systems.</div></td></tr>`; return; }
   const neededCodes=new Set(); basket.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
-  $('resBody').innerHTML = sugBlock + results.map(r=>{ const s=SYS[r.id];
+  $('resBody').innerHTML = sugBlock + results.map(r=>{ const s=SYS[r.id]; const sk=safeKind(r.id);
+    const safeMk = sk==='sov'?`<span style="color:var(--green)" title="your alliance sovereignty — safe">⛊</span> `:'';
     const pts=Object.keys(s[5]).filter(c=>neededCodes.has(c)).sort().map(c=>`<span class="mono" style="color:${PT_COLOR[c]}">${c}${s[5][c]}</span>`).join(' ');
-    return `<tr class="row" data-id="${r.id}"><td>${s[0]}</td><td class="mono" style="color:var(--muted)">${REG[s[2]]||''}</td>
+    return `<tr class="row" data-id="${r.id}"><td>${safeMk}${s[0]}</td><td class="mono" style="color:var(--muted)">${REG[s[2]]||''}</td>
       <td class="r mono ${secClass(r.sec)}">${r.sec.toFixed(1)}</td><td>${pts}</td>
       <td class="r mono ${r.covered===r.total?'full':'part'}">${r.covered}/${r.total}</td>${homeId?`<td class="r mono cy">${r.jumps===Infinity?'—':r.jumps}</td>`:''}</tr>`; }).join('')
     || (sugBlock?'':`<tr><td colspan="6"><div class="hint" style="padding:8px 0">No systems match — loosen the security filter or turn off “whole chain in one system”.</div></td></tr>`);
@@ -675,7 +684,8 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       : `Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; add a character or import some inputs`:''}.`}</div>`;
   filtered.forEach((p,i)=>{ html+=card(`Planet ${i+1} · ${p.title}`, p.sub, p.fac, p.cpu, p.pg, p.cpuB, p.pgB, p.who); });
   if(crewFilter==='all' && plan.unassigned.length){
-    const sug=nearestForMissing(chosen, plan.unassigned);
+    const sugRegion = (homeId&&SYS[homeId])?SYS[homeId][2]:SYS[chosen][2];
+    const sug=nearestForMissing(chosen, plan.unassigned, sugRegion);
     const sugBtn = sug ? `<div style="margin-top:6px"><span id="sugSys" data-id="${sug.id}" style="cursor:pointer;display:inline-block;font-family:var(--mono);font-size:11px;padding:5px 10px;border:1px solid var(--gold-dim);color:var(--gold-bright);background:rgba(201,168,104,.10)">▸ Suggested: ${SYS[sug.id][0]} · ${sug.jumps} jump${sug.jumps!==1?'s':''} — adds ${sug.got.map(c=>PNAME2[c]).join(', ')}</span></div>` : '';
     html+=`<div class="hint" style="color:var(--amber);padding:6px 14px">No planet in this system for: ${plan.unassigned.map(p=>PI.names[p]).join(', ')} — buy these (tick Buy P0), or set up a feeder colony in the nearest system that has them.${sugBtn}</div>`;
   }
@@ -818,6 +828,7 @@ function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
     let c='#1b2630', rad=2.1;
     if(resSet.has(id)){ c=fullSet.has(id)?'#e8d296':'#8a7048'; rad=fullSet.has(id)?6.3:4.2; }
     ctx.fillStyle=c; ctx.beginPath(); ctx.arc(px,py,rad,0,7); ctx.fill();
+    if(myAlliances.size && sovMap[id]!=null && myAlliances.has(sovMap[id])){ ctx.strokeStyle='rgba(140,200,106,0.65)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(px,py,rad+2.6,0,7); ctx.stroke(); }
     if(resSet.has(id)) pts.push([px,py,id]); }
   Object.values(colonies).flat().forEach(co=>{ const s=SYS[co.system]; if(!s)return; const [px,py]=proj(s[3],s[4]);
     ctx.strokeStyle='#8cc86a'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.arc(px,py,3.4,0,7); ctx.stroke(); });
@@ -827,6 +838,7 @@ function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
     ctx.beginPath(); ctx.arc(px,py,6,0,7); ctx.stroke(); }
   $('legend').innerHTML=`<div><i style="background:#e8d296"></i>full-chain system</div><div><i style="background:#8a7048"></i>partial</div>
     <div><i style="background:#8cc86a"></i>your colony</div><div><i style="background:#a0d0e0"></i>home</div>
+    ${myAlliances.size?`<div><i style="border:1px solid #8cc86a;background:transparent;border-radius:50%"></i>your sov (safe)</div>`:''}
     <div style="margin-top:4px;color:var(--muted2)">${sysIds.length} systems · ${zoom.toFixed(1)}×</div>`; }
 function setZoom(f,ax,ay){ const Cx=(ax!=null?ax:(lastMx!=null?lastMx:W/2)), Cy=(ay!=null?ay:(lastMy!=null?lastMy:H/2));
   const nz=Math.max(0.5,Math.min(40,zoom*f)); const g=nz/zoom;
@@ -883,6 +895,16 @@ async function handleRedirect(){ const p=new URLSearchParams(location.search); c
   }catch(e){ alert('Sign-in failed: '+e.message); } history.replaceState({},'',APP.redirect); }
 async function freshTok(id){const s=chars[id];if(Date.now()<s.expires-30000)return s.access;const t=await tok({grant_type:'refresh_token',refresh_token:s.refresh,client_id:APP.clientId});s.access=t.access_token;s.refresh=t.refresh_token||s.refresh;s.expires=Date.now()+(t.expires_in||1200)*1000;saveChars();return s.access;}
 async function eGet(id,path){const tk=await freshTok(id);const r=await fetch('https://esi.evetech.net/latest'+path,{headers:{Authorization:'Bearer '+tk}});if(!r.ok)throw new Error(path+' '+r.status);return r.json();}
+async function esiPub(path){ const r=await fetch('https://esi.evetech.net/latest'+path); if(!r.ok) throw new Error(path+' '+r.status); return r.json(); }
+// sovereignty: which systems your alliance holds (= safe). /sovereignty/map/ is public.
+let sovMap={}; let myAlliances=new Set();
+function safeKind(id){ const s=SYS[id]; if(!s) return null; if(s[1]>=0.45) return 'high'; if(sovMap[id]!=null&&myAlliances.has(sovMap[id])) return 'sov'; return null; }
+async function loadSov(){ try{ const m=await esiPub('/sovereignty/map/'); const mm={}; m.forEach(x=>{ if(x.alliance_id) mm[x.system_id]=x.alliance_id; }); sovMap=mm;
+    drawMap(); if(viewing==='list') renderResults(); }catch(e){} }
+async function loadMyAlliance(id){ try{ const c=await eGet(id,`/characters/${id}/`);
+    if(c.alliance_id) myAlliances.add(c.alliance_id);
+    else if(c.corporation_id){ try{ const co=await eGet(id,`/corporations/${c.corporation_id}/`); if(co.alliance_id) myAlliances.add(co.alliance_id); }catch(e){} }
+    drawMap(); if(viewing==='list') renderResults(); }catch(e){} }
 const PT_BY_NAME={temperate:'T',ice:'I',gas:'G',oceanic:'O',lava:'L',barren:'B',storm:'S',plasma:'P',shattered:'H'};
 async function loadColonies(id){ try{ const list=await eGet(id,`/characters/${id}/planets/`);
     colonies[id]=list.map(c=>({planet_id:c.planet_id,system:c.solar_system_id,type:c.planet_type,pins:c.num_pins,upgrade:c.upgrade_level})); }catch(e){ colonies[id]=[]; }
@@ -921,7 +943,8 @@ buildTiers(); buildProducts(); renderResults(); renderAuth();
 // restore a saved basket: focus the first selected product, show its tier, and load prices/shopping list
 (function(){ const k=Object.keys(sel); if(k.length){ target=k[0]; if(PI.tier[target]) { tier=PI.tier[target]; buildTiers(); } buildProducts(); renderReq(); compute(); loadHubPrices(); } else { renderProcure(); } })();
 (async()=>{ await handleRedirect(); renderAuth();
-  for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); await loadStandings(+id); }
+  loadSov();
+  for(const id of Object.keys(chars)){ await loadColonies(+id); await loadLocation(+id); await loadSkills(+id); await loadStandings(+id); await loadMyAlliance(+id); }
   if(!$('home').value){ const sys=Object.values(charLoc).find(s=>SYS[s]); if(sys){ $('home').value=SYS[sys][0]; if(target) compute(); } }
   renderAuth(); })();
 </script>
