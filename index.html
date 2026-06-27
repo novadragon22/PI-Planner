@@ -271,12 +271,14 @@ function colonyPlan(target,sysId){
   const used={};
   const anyType=()=>{ for(const c in have){ if((used[c]||0)<have[c]){ used[c]=(used[c]||0)+1; return c; } } return Object.keys(have)[0]||'B'; };
   const planets=[]; const unassigned=[];
+  const advIns=arr=>{ const s=new Set(); arr.forEach(o=>{ const r=PI.recipe[o]; if(r) r.in.forEach(([x])=>s.add(+x)); }); return [...s]; };
   const packFac=(rem,kind,getCrew)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic; const fname=kind==='adv'?'Advanced':'Basic';
     const sub=kind==='adv'?'Process P2+':'Import P0 → P1';
     while(rem.length){ const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud; const code=anyType();
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && cpu+fac.cpu<=cpuB && pg+fac.pg<=pgB && made.length<10){ made.push(rem.shift()); cpu+=fac.cpu; pg+=fac.pg; }
-      planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id,
+      planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id, sys:sysId,
+        outs:made.slice(), ins:kind==='adv'?advIns(made):[],
         fac:`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}<br>1× Launchpad · 1× Storage Facility`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
@@ -287,13 +289,13 @@ function colonyPlan(target,sysId){
     const packL=(rem,kind)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic, fname=kind==='adv'?'Advanced':'Basic', sub=kind==='adv'?'Process P2+':'Import P0 → P1';
       while(rem.length){ const code=anyT(); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
         while(rem.length&&cpu+fac.cpu<=cpuB&&pg+fac.pg<=pgB&&made.length<10){ made.push(rem.shift()); cpu+=fac.cpu; pg+=fac.pg; }
-        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,fac:`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,outs:made.slice(),ins:kind==='adv'?advIns(made):[],fac:`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
         if(res.length>60)break; } };
     if(buyP1){ packL(advl.slice(),'adv'); }
     else if(buyP0){ packL(p1l.slice(),'basic'); packL(advl.slice(),'adv'); }
     else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); let pick=null; for(const c of codes){ if((u[c]||0)<have[c]){pick=c;break;} } if(!pick) continue; u[pick]=(u[pick]||0)+1;
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p)); const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu,pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg; let basics=0; while(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB&&basics<8){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;basics++;}
-        res.push({title:`${PNAME2[pick]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
+        res.push({title:`${PNAME2[pick]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,outs:p1?[+p1]:[],ins:[],fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       packL(advl.slice(),'adv'); }
     return res; };
   let mode, note;
@@ -314,7 +316,7 @@ function colonyPlan(target,sysId){
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
       const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
       let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<8){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
-      planets.push({title:`${PNAME2[pick]}`, sub:'Extraction + P1', who:cw.name, whoId:cw.id,
+      planets.push({title:`${PNAME2[pick]}`, sub:'Extraction + P1', who:cw.name, whoId:cw.id, sys:sysId, outs:p1?[+p1]:[], ins:[],
         fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       packFac(advOuts.slice(),'adv',nextFactory); }
@@ -322,17 +324,37 @@ function colonyPlan(target,sysId){
   // full-role characters: each runs their own complete colony for an assigned product
   fulls.forEach(c=>{ const prod=(charProduct[c.id]&&PI.recipe[charProduct[c.id]])?charProduct[c.id]:(sel[target]!=null?target:Object.keys(sel)[0]||target);
     const [cb,pb]=c.bud; planets.push(...chainPlanets(prod,cb,pb,`${c.name} · ${PI.recipe[prod]?PI.recipe[prod].name:''} (full)`,c.id)); });
+  // feeder colony: source planet types missing from the main system in the nearest same-region system, and crew it
+  let feederInfo=null;
+  if(unassigned.length && mode==='extract'){
+    const region = (homeId&&SYS[homeId])?SYS[homeId][2]:SYS[sysId][2];
+    const fsug = nearestForMissing(sysId, unassigned, region);
+    if(fsug){ const fhave=SYS[fsug.id][5]; const fused={}; const still=[]; const feederOwners=new Set();
+      for(const p of unassigned){ const codes=(PI.p0pt[p]||[]).filter(c=>fhave[c]);
+        let pick=null; for(const c of codes){ if((fused[c]||0)<fhave[c]){ pick=c; break; } }
+        if(!pick){ still.push(p); continue; } fused[pick]=(fused[pick]||0)+1;
+        const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
+        if(cw.id!=null) feederOwners.add(cw.id);
+        const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
+        const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
+        let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<8){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
+        planets.push({title:`${PNAME2[pick]} · ${SYS[fsug.id][0]} (feeder)`, sub:`Feeder colony — ${SYS[fsug.id][0]} · ${fsug.jumps} jump${fsug.jumps!==1?'s':''} from main`, who:cw.name, whoId:cw.id, feeder:true, sys:fsug.id, outs:p1?[+p1]:[], ins:[],
+          fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
+          cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
+      unassigned.length=0; still.forEach(p=>unassigned.push(p));
+      feederInfo={id:fsug.id, jumps:fsug.jumps, owners:[...feederOwners].map(i=>{const c=crew.find(x=>String(x.id)===String(i));return c?c.name:null;}).filter(Boolean)}; }
+  }
   if(planProds.length>1) note=`Building all ${planProds.length} basket products in one colony setup. `+note;
   const maxPlanets = roleMode ? crew.filter(c=>c.role!=='notreq').reduce((s,c)=>s+c.cap,0) : (1+icOverride);
   let roleNote='';
   if(roleMode && buildShared){ const hasFactory=advOuts.length>0, hasExtractWork=(mode==='extract');
     if(hasFactory&&!factories.length&&!fulls.length) roleNote+=' No character is set to Factory — set one so someone runs the Advanced facilities (or use Full).';
     if(hasExtractWork&&!extractors.length&&!fulls.length) roleNote+=' No character is set to Extractor.'; }
-  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length};
+  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length,feederInfo};
 }
 
 // ---------- state ----------
-let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null;
+let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null, feederMark=null;
 let icOverride=5, ccuOverride=5, viewing='list';
 let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; let charLoc={}; let closestSys=null; let baseSuggest=[];
 let charSkills={}; // id -> {ic,ccu} per character (from ESI)
@@ -627,6 +649,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   if(cids.length>=2 && !cids.some(id=>charRole[id])){ cids.forEach((id,i)=>charRole[id]= i===0?'extract':'factory'); saveRoles(); }
   const s=SYS[chosen]; let plan=colonyPlan(target,chosen);
   if(autoFit && !_autofitting){ _autofitting=true; const ch=autoFitCrew(plan); _autofitting=false; if(ch) plan=colonyPlan(target,chosen); }
+  feederMark = plan.feederInfo ? plan.feederInfo.id : null; drawMap();
   $('resHd').innerHTML=`<span style="cursor:pointer;color:var(--cyan)" id="backList">← candidates</span> &nbsp; Colony plan · <b>${s[0]}</b> (${REG[s[2]]})`;
   $('closest').innerHTML='';
   const loggedIn=Object.keys(chars).length>0;
@@ -683,6 +706,10 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       ? `<b style="color:var(--cyan-bright)">${fcrew.name}</b> runs <b style="color:${filtered.length>fcrew.cap?'var(--red)':'var(--green)'}">${filtered.length}</b> of their ${fcrew.cap} planets (${fcrew.role==='extract'?'Extractor':'Factory'}).`
       : `Plan uses <b style="color:${plan.total>plan.maxPlanets?'var(--red)':'var(--green)'}">${plan.total}</b> planets of ${plan.maxPlanets}${plan.total>plan.maxPlanets?` — over by ${plan.total-plan.maxPlanets}; add a character or import some inputs`:''}.`}</div>`;
   filtered.forEach((p,i)=>{ html+=card(`Planet ${i+1} · ${p.title}`, p.sub, p.fac, p.cpu, p.pg, p.cpuB, p.pgB, p.who); });
+  if(crewFilter==='all' && plan.feederInfo){ const f=plan.feederInfo;
+    html+=`<div style="margin:6px 14px;padding:7px 10px;border:1px solid var(--gold-dim);background:rgba(216,162,74,.08)" class="hint">
+      ◈ <b style="color:var(--gold-bright)">Feeder colony required</b> in <span class="csys" data-id="${f.id}" style="cursor:pointer;color:var(--cyan-bright)"><b>${SYS[f.id][0]}</b></span> · ${f.jumps} jump${f.jumps!==1?'s':''} from main · ${REG[SYS[f.id][2]]||''}.
+      Extraction for the missing planet types runs there${f.owners.length?`, crewed by <b>${f.owners.join(', ')}</b>`:' (no spare pilot capacity — add a character)'}.</div>`; }
   if(crewFilter==='all' && plan.unassigned.length){
     const sugRegion = (homeId&&SYS[homeId])?SYS[homeId][2]:SYS[chosen][2];
     const sug=nearestForMissing(chosen, plan.unassigned, sugRegion);
@@ -701,18 +728,93 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   if($('crewSel')) $('crewSel').onchange=e=>{ crewFilter=e.target.value; renderColony(); };
   if($('allProd')) $('allProd').onchange=e=>{ allProducts=e.target.checked; localStorage.setItem('pi_allprod',allProducts?'1':'0'); renderColony(); };
   if($('sugSys')) $('sugSys').onclick=()=>selectSystem(+$('sugSys').dataset.id);
+  $('resBody').querySelectorAll('.csys').forEach(x=>x.onclick=()=>selectSystem(+x.dataset.id));
   renderNav();
 }
 
 // ---------- view switcher ----------
-function renderNav(){ const n=$('navView'); if(!n) return; const grp=(viewing==='mine')?'mine':(viewing==='make')?'make':'cand';
+function renderNav(){ const n=$('navView'); if(!n) return; const grp=(viewing==='mine')?'mine':(viewing==='make')?'make':(viewing==='logi')?'logi':'cand';
   const b=(k,lbl)=>`<span class="navbtn" data-v="${k}" style="cursor:pointer;padding:3px 8px;border:1px solid ${grp===k?'var(--gold-dim)':'var(--line2)'};color:${grp===k?'var(--gold-bright)':'var(--muted)'};background:${grp===k?'rgba(201,168,104,.12)':'transparent'}">${lbl}</span>`;
-  n.innerHTML=b('cand','Candidates')+b('mine','My colonies')+b('make','What to make');
+  n.innerHTML=b('cand','Candidates')+b('mine','My colonies')+b('logi','Colony logistics')+b('make','What to make');
   n.querySelectorAll('.navbtn').forEach(x=>x.onclick=()=>setView(x.dataset.v)); }
 function setView(v){ if(v==='mine'){ viewing='mine'; renderMine(); }
   else if(v==='make'){ viewing='make'; renderMake(); }
+  else if(v==='logi'){ viewing='logi'; renderLogistics(); }
   else { viewing= chosen?'colony':'list'; if(viewing==='colony') renderColony(); else renderResults(); }
   drawMap(); }
+// ---------- colony logistics: production → transfer routing ----------
+function buildLogistics(plan){ const rows=[];
+  plan.planets.forEach(p=>{ (p.outs||[]).forEach(t=>{
+    const cons=plan.planets.filter(q=>q!==p && (q.ins||[]).includes(t));
+    if(cons.length) cons.forEach(q=>rows.push({tid:t,from:p,to:q})); else rows.push({tid:t,from:p,to:null}); }); });
+  // order by tier so the chain reads low→high
+  return rows.sort((a,b)=>(PI.tier[a.tid]||0)-(PI.tier[b.tid]||0)); }
+function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics <span class="hint" style="font-weight:400">· production &amp; transfer routing</span>'; $('closest').innerHTML=''; $('resHead').innerHTML='';
+  const sysL = chosen||(baseSuggest[0]&&baseSuggest[0].id)||null;
+  if(!target||!sysL){ $('resBody').innerHTML=`<tr><td><div style="display:flex;padding:10px 14px"><span class="hint">Pick target product(s) and a colony system (Candidates → click a system) to see the logistics route.</span><span style="margin-left:auto"><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--cyan)">⭱ Import route</span></span></div></td></tr>`; wireImport('logiImp'); return; }
+  const plan=colonyPlan(target,sysL); const rows=buildLogistics(plan);
+  const sn=id=>SYS[id]?SYS[id][0]:'?';
+  const cell=p=> p? `${sn(p.sys)} · <span class="hint">${(p.title||'').replace(/<[^>]+>/g,'')}</span>${p.who?` · <b style="color:var(--cyan)">${p.who}</b>`:' · <span class="hint">unassigned</span>'}` : '';
+  const head=`<div style="display:flex;align-items:center;gap:8px;padding:8px 14px 4px"><b>${sn(sysL)} route</b><span class="hint">${rows.length} flows · ${plan.planets.length} planets</span>
+    <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>`;
+  const tbl=`<table class="mono" style="font-size:11px;width:100%;border-collapse:collapse">
+    <tr class="hint"><td style="padding:4px 10px">Product</td><td>Made in · system · planet · crew</td><td>Destination · system · planet · crew</td><td>Transfer</td></tr>
+    ${rows.map(r=>{ const t=PI.names[r.tid]||String(r.tid); const trans=r.to&&String(r.from.whoId)!==String(r.to.whoId);
+      const dest=r.to?cell(r.to):`<span style="color:var(--green)">Export / market${PI.tier[r.tid]>=4?' · final product':''}</span>`;
+      const diffSys=r.to&&r.to.sys!==r.from.sys;
+      const xfer=r.to?(trans?`<span style="color:var(--amber)">→ hand to <b>${r.to.who||'?'}</b></span>`:'<span class="hint">same pilot</span>'):'<span class="hint">—</span>';
+      return `<tr style="border-top:1px solid var(--line)"><td style="padding:4px 10px;color:var(--gold-bright)">${t} <span class="hint">P${PI.tier[r.tid]}</span></td>
+        <td>${cell(r.from)}</td><td>${dest}${diffSys?` <span class="hint">· haul ${sn(r.from.sys)}→${sn(r.to.sys)}</span>`:''}</td><td>${xfer}</td></tr>`; }).join('')}
+  </table>`;
+  $('resBody').innerHTML=`<tr><td style="padding:0">${head}${tbl}<div class="hint" style="padding:8px 14px;color:var(--muted2)">Each row = one planet's output and the planet/pilot that consumes it next. "Hand to" flags an intermediate that crosses pilots (must be transferred); "haul" flags a cross-system move (e.g. feeder → main). Final products ship to market/JF.</div></td></tr>`;
+  $('logiExp').onclick=()=>exportRoute(sysL); wireImport('logiImp'); }
+function routeText(sysL){ const data={ v:1, app:'eve-pi-planner', kind:'colony-logistics', generated:new Date().toISOString(),
+    home:($('home').value||'').trim(), staging: sysL&&SYS[sysL]?SYS[sysL][0]:'', sellMode, buyP0, buyP1, allProducts,
+    products:Object.keys(sel).map(id=>({id:+id,name:PI.recipe[id]?PI.recipe[id].name:String(id),qty:sel[id]})) };
+  const plan=sysL?colonyPlan(target,sysL):null; const rows=plan?buildLogistics(plan):[];
+  const man=rows.map(r=>{ const t=PI.names[r.tid]||r.tid; const f=`${SYS[r.from.sys]?SYS[r.from.sys][0]:'?'} / ${(r.from.title||'').replace(/<[^>]+>/g,'')} / ${r.from.who||'unassigned'}`;
+    const d=r.to?`${SYS[r.to.sys]?SYS[r.to.sys][0]:'?'} / ${(r.to.title||'').replace(/<[^>]+>/g,'')} / ${r.to.who||'unassigned'}`:'Export / market';
+    const x=r.to&&String(r.from.whoId)!==String(r.to.whoId)?` [transfer to ${r.to.who||'?'}]`:''; return `- ${t}: ${f}  ->  ${d}${x}`; }).join('\n');
+  return `EVE PI Planner — Colony Logistics Route
+Generated: ${data.generated}
+Home: ${data.home||'(unset)'}    Staging/base: ${data.staging||'(unset)'}
+Mode: ${buyP1?'Buy P1':buyP0?'Buy P0':'Self-extract'}${allProducts?' · all products':''} · sell via ${sellMode==='sell'?'sell orders':'buy orders'}
+Products: ${data.products.map(p=>p.name+' ×'+p.qty).join(', ')}
+
+MANIFEST (product: made in system / planet / crew  ->  destination)
+${man||'(no plan)'}
+
+--- machine data (do not edit) ---
+<<<PIPLAN
+${JSON.stringify(data)}
+PIPLAN>>>`; }
+function exportRoute(sysL){ const txt=routeText(sysL); const blob=new Blob([txt],{type:'text/plain'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='pi-logistics-'+((sysL&&SYS[sysL]?SYS[sysL][0]:'route').replace(/\s+/g,'_'))+'.txt'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+let _logiFile=null;
+function wireImport(btnId){ const b=$(btnId); if(!b) return;
+  if(!_logiFile){ _logiFile=document.createElement('input'); _logiFile.type='file'; _logiFile.accept='.txt,text/plain'; _logiFile.style.display='none'; document.body.appendChild(_logiFile);
+    _logiFile.onchange=()=>{ const f=_logiFile.files[0]; if(!f) return; const rd=new FileReader(); rd.onload=()=>{ importRoute(rd.result); _logiFile.value=''; }; rd.readAsText(f); }; }
+  b.onclick=()=>_logiFile.click(); }
+function importRoute(text){ let data=null; const m=text.match(/<<<PIPLAN\s*([\s\S]*?)\s*PIPLAN>>>/);
+  try{ data=m?JSON.parse(m[1]):JSON.parse(text); }catch(e){ alert('Could not read this route file.'); return; }
+  if(!data||!Array.isArray(data.products)||!data.products.length){ alert('No products found in the file.'); return; }
+  sel={}; data.products.forEach(p=>{ if(PI.recipe[p.id]) sel[+p.id]=Math.max(1,+p.qty||1); });
+  if(!Object.keys(sel).length){ alert('Products in the file are not recognised.'); return; }
+  target=+Object.keys(sel)[0]; tier=PI.tier[target]||tier;
+  if(data.sellMode){ sellMode=data.sellMode; localStorage.setItem('pi_sellmode',sellMode); }
+  if(typeof data.buyP0==='boolean'){ buyP0=data.buyP0; localStorage.setItem('pi_bp0',buyP0?'1':'0'); }
+  if(typeof data.buyP1==='boolean'){ buyP1=data.buyP1; localStorage.setItem('pi_bp1',buyP1?'1':'0'); }
+  if(typeof data.allProducts==='boolean'){ allProducts=data.allProducts; localStorage.setItem('pi_allprod',allProducts?'1':'0'); }
+  saveSel();
+  const curHome=($('home').value||'').trim(), fileHome=(data.home||'').trim(); let homeChanged=false;
+  if(!curHome && fileHome){ $('home').value=fileHome; } else if(curHome && fileHome && curHome.toLowerCase()!==fileHome.toLowerCase()){ homeChanged=true; }
+  buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices();
+  let msg='';
+  if(homeChanged){ chosen=baseSuggest[0]?baseSuggest[0].id:null; msg=`Home differs from file (file: ${fileHome} · yours: ${curHome}) — suggested new base ${chosen?SYS[chosen][0]:'(none found in region)'}.`; }
+  else { const stId=data.staging?nameToId[String(data.staging).toLowerCase()]:null; chosen=stId||(baseSuggest[0]?baseSuggest[0].id:null);
+    msg=stId?`Loaded route — staging ${SYS[stId][0]}.`:(chosen?`Loaded route — suggested base ${SYS[chosen][0]}.`:'Loaded route.'); }
+  feederMark=null; viewing='logi'; renderLogistics(); drawMap();
+  const hd=$('resHd'); if(hd) hd.innerHTML+=` <span class="hint" style="color:var(--amber);font-weight:400">· ${msg}</span>`; }
 
 // ---------- My colonies (live from ESI) + extractor modeling ----------
 let colDetail={}; // planet_id -> {extractors:[{prod,perHr,heads,cycle,qty}], factoryPins, ecuPins}
@@ -834,10 +936,20 @@ function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
     ctx.strokeStyle='#8cc86a'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.arc(px,py,3.4,0,7); ctx.stroke(); });
   if(homeId&&SYS[homeId]){ const [px,py]=proj(SYS[homeId][3],SYS[homeId][4]); ctx.strokeStyle='#a0d0e0';ctx.lineWidth=1.6;
     ctx.beginPath(); ctx.arc(px,py,5,0,7); ctx.stroke(); ctx.fillStyle='#a0d0e0'; ctx.fillRect(px-1,py-1,2,2); }
-  if(chosen&&SYS[chosen]){ const [px,py]=proj(SYS[chosen][3],SYS[chosen][4]); ctx.strokeStyle='#e8d296';ctx.lineWidth=1.6;
-    ctx.beginPath(); ctx.arc(px,py,6,0,7); ctx.stroke(); }
+  const dmd=(px,py,r)=>{ ctx.beginPath(); ctx.moveTo(px,py-r); ctx.lineTo(px+r,py); ctx.lineTo(px,py+r); ctx.lineTo(px-r,py); ctx.closePath(); };
+  // feeder colony (drawn first, with a dashed link back to the main colony)
+  if(viewing==='colony' && feederMark && SYS[feederMark]){ const [fx,fy]=proj(SYS[feederMark][3],SYS[feederMark][4]);
+    if(chosen&&SYS[chosen]){ const [cx,cy]=proj(SYS[chosen][3],SYS[chosen][4]); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle='rgba(216,162,74,0.55)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(fx,fy); ctx.lineTo(cx,cy); ctx.stroke(); ctx.restore(); }
+    ctx.strokeStyle='#d8a24a'; ctx.lineWidth=1.6; dmd(fx,fy,6); ctx.stroke();
+    ctx.fillStyle='#d8a24a'; ctx.beginPath(); ctx.arc(fx,fy,1.7,0,7); ctx.fill(); }
+  // selected colony — filled gold diamond with ring
+  if(chosen&&SYS[chosen]){ const [px,py]=proj(SYS[chosen][3],SYS[chosen][4]);
+    ctx.fillStyle='#e8d296'; dmd(px,py,5.5); ctx.fill();
+    ctx.strokeStyle='#030507'; ctx.lineWidth=1.2; dmd(px,py,5.5); ctx.stroke();
+    ctx.strokeStyle='#e8d296'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(px,py,9.5,0,7); ctx.stroke(); }
   $('legend').innerHTML=`<div><i style="background:#e8d296"></i>full-chain system</div><div><i style="background:#8a7048"></i>partial</div>
     <div><i style="background:#8cc86a"></i>your colony</div><div><i style="background:#a0d0e0"></i>home</div>
+    <div><i style="background:#e8d296;transform:rotate(45deg)"></i>selected colony</div>${(viewing==='colony'&&feederMark)?`<div><i style="border:1px solid #d8a24a;background:transparent;transform:rotate(45deg)"></i>feeder colony</div>`:''}
     ${myAlliances.size?`<div><i style="border:1px solid #8cc86a;background:transparent;border-radius:50%"></i>your sov (safe)</div>`:''}
     <div style="margin-top:4px;color:var(--muted2)">${sysIds.length} systems · ${zoom.toFixed(1)}×</div>`; }
 function setZoom(f,ax,ay){ const Cx=(ax!=null?ax:(lastMx!=null?lastMx:W/2)), Cy=(ay!=null?ay:(lastMy!=null?lastMy:H/2));
