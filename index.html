@@ -205,6 +205,21 @@ function nearestForMissing(fromId, missingP0){
     if(!best || covers>best.covers || (covers===best.covers && j<best.jumps)) best={id,jumps:j,covers,got};
   }
   return best; }
+// greedily pick the nearest feeder systems (outward from fromId, i.e. home/staging) that together cover all missing planet types
+function feederPlan(fromId, missingP0, maxFeeders){ maxFeeders=maxFeeders||3;
+  let need=new Set(); missingP0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>need.add(c)));
+  if(!need.size||!fromId) return [];
+  const dist=bfs(fromId); const feeders=[];
+  while(need.size && feeders.length<maxFeeders){ let best=null;
+    for(const id of sysIds){ if(id===fromId) continue; const j=dist[id]; if(j===undefined) continue;
+      const have=SYS[id][5]; const got=[]; need.forEach(c=>{ if(have[c]) got.push(c); });
+      if(!got.length) continue;
+      if(!best || got.length>best.got.length || (got.length===best.got.length && j<best.jumps)) best={id,jumps:j,got}; }
+    if(!best) break; feeders.push(best); best.got.forEach(c=>need.delete(c)); }
+  return feeders; }
+// for each missing planet-type code, the jumps from fromId to the nearest system that has it
+function codeDistances(fromId, codes){ const dist=bfs(fromId);
+  return codes.map(c=>{ let bj=Infinity; for(const id of sysIds){ if(SYS[id][5][c]!==undefined){ const j=dist[id]; if(j!==undefined&&j<bj){ bj=j; if(bj===1)break; } } } return {code:c,jumps:bj===Infinity?null:bj}; }); }
 
 // ---------- PI colony layout (SDE-accurate CPU/PG) ----------
 // command-center budget [CPU,PG] by Command Center Upgrades level (base from SDE: 1675/6000)
@@ -240,7 +255,10 @@ function colonyPlan(target,sysId){
   const ids=Object.keys(chars);
   const roleMode=ids.length>=2;
   const crew=ids.map(id=>({ id, name:(chars[id]&&chars[id].name)||('Char '+id), role:(charRole[id]||'extract'),
-    cap: charSkills[id]?1+charSkills[id].ic:1+icOverride, bud: charSkills[id]?CCU_BUDGET[charSkills[id].ccu]:[cpuB0,pgB0] }));
+    cap: charSkills[id]?1+charSkills[id].ic:1+icOverride, bud: charSkills[id]?CCU_BUDGET[charSkills[id].ccu]:[cpuB0,pgB0],
+    sk: charSkills[id]?(charSkills[id].ic||0)+(charSkills[id].ccu||0):0 }));
+  // prioritise the most PI-skilled pilots first (more planets, then more CPU budget); least-skilled fall to the end (and are dropped first by auto-fit)
+  crew.sort((a,b)=> b.cap-a.cap || b.bud[0]-a.bud[0] || b.sk-a.sk || String(a.name).localeCompare(String(b.name)));
   const extractors=crew.filter(c=>c.role==='extract'), factories=crew.filter(c=>c.role==='factory'), fulls=crew.filter(c=>c.role==='full');
   // sequential picker: fill each character to their planet cap before moving on
   const mkPick=list=>{ let idx=0,cnt=0; return ()=>{ while(idx<list.length){ const c=list[idx]; if(cnt<c.cap){cnt++;return c;} idx++;cnt=0; } return {bud:[cpuB0,pgB0],name:null,id:null}; }; };
@@ -300,7 +318,7 @@ function colonyPlan(target,sysId){
   // full-role characters: each runs their own complete colony for an assigned product
   fulls.forEach(c=>{ const prod=(charProduct[c.id]&&PI.recipe[charProduct[c.id]])?charProduct[c.id]:(sel[target]!=null?target:Object.keys(sel)[0]||target);
     const [cb,pb]=c.bud; planets.push(...chainPlanets(prod,cb,pb,`${c.name} · ${PI.recipe[prod]?PI.recipe[prod].name:''} (full)`,c.id)); });
-  const maxPlanets = roleMode ? crew.reduce((s,c)=>s+c.cap,0) : (1+icOverride);
+  const maxPlanets = roleMode ? crew.filter(c=>c.role!=='notreq').reduce((s,c)=>s+c.cap,0) : (1+icOverride);
   let roleNote='';
   if(roleMode && buildShared){ const hasFactory=advOuts.length>0, hasExtractWork=(mode==='extract');
     if(hasFactory&&!factories.length&&!fulls.length) roleNote+=' No character is set to Factory — set one so someone runs the Advanced facilities (or use Full).';
@@ -311,7 +329,7 @@ function colonyPlan(target,sysId){
 // ---------- state ----------
 let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null;
 let icOverride=5, ccuOverride=5, viewing='list';
-let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; let charLoc={}; let closestSys=null;
+let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; let charLoc={}; let closestSys=null; let baseSuggest=[];
 let charSkills={}; // id -> {ic,ccu} per character (from ESI)
 let charRole=JSON.parse(localStorage.getItem('pi_roles')||'{}'); // id -> 'extract' | 'factory' | 'full'
 let charProduct=JSON.parse(localStorage.getItem('pi_charprod')||'{}'); // id -> product id (for 'full' role with multi-select)
@@ -319,7 +337,21 @@ function saveCharProd(){ localStorage.setItem('pi_charprod',JSON.stringify(charP
 function setCharProduct(id,pid){ charProduct[id]=pid; saveCharProd(); if(viewing==='colony'&&chosen&&target) renderColony(); }
 function saveRoles(){ localStorage.setItem('pi_roles',JSON.stringify(charRole)); }
 let crewFilter='all'; // colony-plan view filter: 'all' or a character id
+let autoFit=localStorage.getItem('pi_autofit')!=='0'; // auto-mark surplus characters 'not required'
+let _autofitting=false;
 function setRole(id,r){ charRole[id]=r; saveRoles(); if(viewing==='colony'&&chosen&&target) renderColony(); }
+// mark characters that the plan doesn't actually use as 'not required', so you run the colony with the fewest pilots.
+// only trims a pilot whose role's work is fully covered by others (won't drop someone a needed role still relies on).
+function autoFitCrew(plan){ if(!autoFit||!plan.roleMode) return false;
+  const used=new Set(plan.planets.map(p=>p.whoId).filter(x=>x!=null).map(String));
+  const factoryUnmet=plan.planets.some(p=>/factory/.test(p.title)&&p.whoId==null);
+  const extractUnmet=plan.planets.some(p=>!/factory/.test(p.title)&&p.whoId==null);
+  let changed=false;
+  plan.crew.forEach(c=>{ if(c.role==='notreq'||c.role==='full') return; if(used.has(String(c.id))) return;
+    if(c.role==='factory' && !factoryUnmet){ charRole[c.id]='notreq'; changed=true; }
+    else if(c.role==='extract' && !extractUnmet){ charRole[c.id]='notreq'; changed=true; } });
+  if(changed) saveRoles();
+  return changed; }
 
 // ---------- product list ----------
 function buildTiers(){ $('tiers').innerHTML=[1,2,3,4].map(t=>`<span class="tier ${t===tier?'on':''}" data-t="${t}">P${t}</span>`).join('');
@@ -528,10 +560,15 @@ function compute(){ const p0=basketP0(); if(!p0.length){ results=[]; closestSys=
   }
   cand.sort((a,b)=> b.covered-a.covered || (a.jumps??1e9)-(b.jumps??1e9) || b.sec-a.sec );
   results=cand.slice(0,300);
-  // closest system that satisfies the chain (prefer full coverage), by jumps from home/location
-  closestSys=null;
-  if(homeId){ const maxCov=Math.max(...cand.map(c=>c.covered),0); const pool=cand.filter(c=>c.covered===maxCov&&c.jumps!==Infinity);
-    if(pool.length){ closestSys=pool.reduce((a,b)=>(b.jumps<a.jumps?b:a)); } }
+  // up to 3 recommended main systems: most needed planet types, nearest to home/staging; plus distance to each missing type
+  const neededCodes=new Set(); p0.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
+  baseSuggest=[];
+  for(const b of cand.slice(0,3)){
+    const miss=[...neededCodes].filter(c=>!b.have[c]);
+    baseSuggest.push({id:b.id, covered:b.covered, total:b.total, jumps:b.jumps,
+      missCodes:miss, dists: miss.length?codeDistances(b.id, miss):[]});
+  }
+  closestSys=baseSuggest[0]||null;
   renderResults(); drawMap();
   if(viewing==='colony'&&chosen&&target) renderColony(); }
 
@@ -541,20 +578,33 @@ function renderResults(){
   const lbl = pids.length>1 ? `${pids.length} products` : (pids.length===1?PI.recipe[pids[0]].name:(target?PI.recipe[target].name:''));
   $('resHd').textContent = basket.length? `${results.length} candidate systems for ${lbl}` : 'Candidate systems';
   const cl=$('closest');
-  if(closestSys&&basket.length){ const s=SYS[closestSys.id]; const full=closestSys.covered===closestSys.total;
-    cl.innerHTML=`▸ closest ${full?'full-chain':closestSys.covered+'/'+closestSys.total}: <b>${s[0]}</b> · ${closestSys.jumps} jump${closestSys.jumps!==1?'s':''}`;
-    cl.onclick=()=>{ selectSystem(closestSys.id); }; }
-  else cl.innerHTML='';
+  cl.innerHTML = (baseSuggest.length&&basket.length) ? `▸ ${baseSuggest.length} suggested base${baseSuggest.length>1?'s':''} below` : '';
+  const jtxt=j=>j==null?'—':j+'j';
+  const sugBlock = (baseSuggest.length&&basket.length) ? `<tr><td colspan="6" style="padding:0">
+    <div style="margin:8px 14px;border:1px solid var(--line2);background:rgba(122,184,200,.04)">
+      <div class="mono" style="font-size:10px;letter-spacing:.12em;color:var(--gold);padding:7px 10px 3px">SUGGESTED MAIN SYSTEMS · from ${homeId&&SYS[homeId]?SYS[homeId][0]:'(set home/staging)'}</div>
+      ${baseSuggest.map((b,i)=>{ const s=SYS[b.id]; const full=b.covered===b.total;
+        const miss = full?`<span style="color:var(--green)">covers all ${b.total} types</span>`
+          : `<span style="color:var(--muted2)">missing</span> ${b.dists.map(d=>`<span class="mono" style="color:${PT_COLOR[d.code]}">${d.code}</span><span class="mono" style="color:${d.jumps==null?'var(--red)':'var(--amber)'}">→${d.jumps==null?'n/a':d.jumps+'j'}</span>`).join(' · ')}`;
+        return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 10px;border-top:1px solid var(--line)">
+          <span class="csys" data-id="${b.id}" style="cursor:pointer;color:${i===0?'var(--cyan-bright)':'var(--cyan)'};min-width:150px"><b>${i+1}. ${s[0]}</b> <span class="hint">${REG[s[2]]||''}</span></span>
+          <span class="mono" style="color:${b.covered===b.total?'var(--green)':'var(--gold-bright)'}">${b.covered}/${b.total}</span>
+          <span class="mono hint">${jtxt(b.jumps)} from home</span>
+          <span style="flex:1;font-size:11px">${miss}</span></div>`; }).join('')}
+      <div class="hint" style="padding:3px 10px 7px;color:var(--muted2)">Distances show the nearest system supplying each missing planet type (jumps from that base). Click a system to plan its colony.</div>
+    </div></td></tr>` : '';
   $('resHead').innerHTML = `<tr><th>System</th><th>Region</th><th class="r">Sec</th><th>Planets (needed types)</th><th class="r">Coverage</th>${homeId?'<th class="r">Jumps</th>':''}</tr>`;
   if(!basket.length){ $('resBody').innerHTML=`<tr><td colspan="6"><div class="hint" style="padding:8px 0">Select one or more target products to locate systems.</div></td></tr>`; return; }
   const neededCodes=new Set(); basket.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
-  $('resBody').innerHTML = results.map(r=>{ const s=SYS[r.id];
+  $('resBody').innerHTML = sugBlock + results.map(r=>{ const s=SYS[r.id];
     const pts=Object.keys(s[5]).filter(c=>neededCodes.has(c)).sort().map(c=>`<span class="mono" style="color:${PT_COLOR[c]}">${c}${s[5][c]}</span>`).join(' ');
     return `<tr class="row" data-id="${r.id}"><td>${s[0]}</td><td class="mono" style="color:var(--muted)">${REG[s[2]]||''}</td>
       <td class="r mono ${secClass(r.sec)}">${r.sec.toFixed(1)}</td><td>${pts}</td>
       <td class="r mono ${r.covered===r.total?'full':'part'}">${r.covered}/${r.total}</td>${homeId?`<td class="r mono cy">${r.jumps===Infinity?'—':r.jumps}</td>`:''}</tr>`; }).join('')
-    || `<tr><td colspan="6"><div class="hint" style="padding:8px 0">No systems match — loosen the security filter or turn off “whole chain in one system”.</div></td></tr>`;
-  $('resBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>selectSystem(+tr.dataset.id)); renderNav(); }
+    || (sugBlock?'':`<tr><td colspan="6"><div class="hint" style="padding:8px 0">No systems match — loosen the security filter or turn off “whole chain in one system”.</div></td></tr>`);
+  $('resBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>selectSystem(+tr.dataset.id));
+  $('resBody').querySelectorAll('.csys').forEach(x=>x.onclick=ev=>{ ev.stopPropagation(); selectSystem(+x.dataset.id); });
+  renderNav(); }
 
 function selectSystem(id){ chosen=id; viewing='colony'; drawMap(); renderColony(); }
 const PNAME2={T:'Temperate',I:'Ice',G:'Gas',O:'Oceanic',L:'Lava',B:'Barren',S:'Storm',P:'Plasma',H:'Shattered'};
@@ -562,7 +612,8 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   // default roles for a fresh multi-character setup: first = extractor, rest = factory
   const cids=Object.keys(chars);
   if(cids.length>=2 && !cids.some(id=>charRole[id])){ cids.forEach((id,i)=>charRole[id]= i===0?'extract':'factory'); saveRoles(); }
-  const s=SYS[chosen]; const plan=colonyPlan(target,chosen);
+  const s=SYS[chosen]; let plan=colonyPlan(target,chosen);
+  if(autoFit && !_autofitting){ _autofitting=true; const ch=autoFitCrew(plan); _autofitting=false; if(ch) plan=colonyPlan(target,chosen); }
   $('resHd').innerHTML=`<span style="cursor:pointer;color:var(--cyan)" id="backList">← candidates</span> &nbsp; Colony plan · <b>${s[0]}</b> (${REG[s[2]]})`;
   $('closest').innerHTML='';
   const loggedIn=Object.keys(chars).length>0;
@@ -577,21 +628,25 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   let crewHtml='';
   if(plan.roleMode){ const selIds=Object.keys(sel); const multi=selIds.length>1;
     const rb=(c,r,lbl)=>`<span class="rolebtn" data-id="${c.id}" data-r="${r}" style="cursor:pointer;font-family:var(--mono);font-size:10px;padding:3px 8px;border:1px solid ${c.role===r?'var(--gold-dim)':'var(--line2)'};color:${c.role===r?'var(--gold-bright)':'var(--muted)'};background:${c.role===r?'rgba(201,168,104,.12)':'transparent'}">${lbl}</span>`;
+    const activeN=plan.crew.filter(c=>c.role!=='notreq').length;
     crewHtml=`<div style="margin:2px 14px 6px;padding:8px 10px;border:1px solid var(--line)">
-    <div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);margin-bottom:5px">CREW ROLES</div>
-    ${plan.crew.map(c=>{ const prodVal=(charProduct[c.id]&&sel[charProduct[c.id]]!=null)?charProduct[c.id]:(sel[target]!=null?target:selIds[0]);
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <span class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold)">CREW ROLES</span>
+      <span class="hint" style="margin-left:auto">${activeN} of ${plan.crew.length} pilots used</span>
+      <label class="hint" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Automatically set surplus pilots to 'Not required' so the colony runs with the fewest characters"><input type="checkbox" id="autoFit" ${autoFit?'checked':''}> auto-fit</label></div>
+    ${plan.crew.map(c=>{ const nr=c.role==='notreq'; const prodVal=(charProduct[c.id]&&sel[charProduct[c.id]]!=null)?charProduct[c.id]:(sel[target]!=null?target:selIds[0]);
       const drop=(c.role==='full'&&multi)?`<select class="cprod" data-id="${c.id}" style="width:auto;font-size:11px">${selIds.map(pid=>`<option value="${pid}" ${String(prodVal)===String(pid)?'selected':''}>${PI.recipe[pid].name}</option>`).join('')}</select>`:'';
       const cs=charSkills[c.id]; let tips=[],short='';
-      if(cs){ if(cs.ic<5) tips.push(`Interplanetary Consolidation ${ROMAN[cs.ic]}→V = up to +${5-cs.ic} planet${5-cs.ic>1?'s':''}`);
+      if(cs&&!nr){ if(cs.ic<5) tips.push(`Interplanetary Consolidation ${ROMAN[cs.ic]}→V = up to +${5-cs.ic} planet${5-cs.ic>1?'s':''}`);
         if(cs.ccu<5){ const g=CCU_BUDGET[5][0]-CCU_BUDGET[cs.ccu][0]; tips.push(`Command Center Upgrades ${ROMAN[cs.ccu]}→V = +${g.toLocaleString()} CPU`); }
         if(tips.length) short = cs.ic<5?`⬆ +${5-cs.ic} planet${5-cs.ic>1?'s':''}`:'⬆ +CPU'; }
       const upBadge = short?`<span class="skup" title="${tips.join(' · ')} — training this raises this character's own capacity and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
-      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;flex-wrap:wrap">
-      <span style="font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${c.cap} planets · CPU ${c.bud[0]}</span></span>
-      ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${drop}${upBadge}
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;flex-wrap:wrap;${nr?'opacity:.5':''}">
+      <span style="font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${nr?'not required':c.cap+' planets · CPU '+c.bud[0]}</span></span>
+      ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${rb(c,'notreq','Not required')}${nr?'':drop}${nr?'':upBadge}
     </div>`; }).join('')}
     ${plan.roleNote?`<div class="hint" style="color:var(--amber);margin-top:4px">${plan.roleNote}</div>`:''}
-    <div class="hint" style="color:var(--muted2);margin-top:4px">Full = one character runs an entire colony chain (extract → P4) on their own planets${selIds.length>1?'; pick which product from the dropdown':''}.</div></div>`; }
+    <div class="hint" style="color:var(--muted2);margin-top:4px">Full = one pilot runs a whole chain alone${selIds.length>1?' (pick its product)':''}. Not required = excluded; auto-fit trims unused pilots automatically.</div></div>`; }
   // crew filter (isolate one character's contribution); reset if the filtered char is gone
   if(crewFilter!=='all' && !plan.crew.some(c=>String(c.id)===String(crewFilter))) crewFilter='all';
   const filtered = (plan.roleMode && crewFilter!=='all') ? plan.planets.filter(p=>String(p.whoId)===String(crewFilter)) : plan.planets;
@@ -625,6 +680,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   $('icSel').onchange=e=>{ icOverride=+e.target.value; renderColony(); };
   $('ccuSel').onchange=e=>{ ccuOverride=+e.target.value; renderColony(); };
   $('resBody').querySelectorAll('.rolebtn').forEach(b=>b.onclick=()=>setRole(b.dataset.id,b.dataset.r));
+  if($('autoFit')) $('autoFit').onchange=e=>{ autoFit=e.target.checked; localStorage.setItem('pi_autofit',autoFit?'1':'0'); renderColony(); };
   $('resBody').querySelectorAll('.cprod').forEach(s=>s.onchange=()=>setCharProduct(s.dataset.id, s.value));
   if($('crewSel')) $('crewSel').onchange=e=>{ crewFilter=e.target.value; renderColony(); };
   if($('sugSys')) $('sugSys').onclick=()=>selectSystem(+$('sugSys').dataset.id);
@@ -741,11 +797,19 @@ function resize(){ const r=cv.parentElement.getBoundingClientRect(); cv.width=r.
 // uniform scale on both axes (aspect-correct) + centered + zoom/pan -> symmetrical galaxy
 function proj(x,y){ const k=fitScale()*zoom; return [ W/2+(x-bounds.cx)*k+panx, H/2-(y-bounds.cy)*k+pany ]; }
 function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
+  // stargate routes (50% visibility) — drawn under the system dots, each edge once, offscreen pairs culled
+  ctx.globalAlpha=0.5; ctx.strokeStyle='#2a4050'; ctx.lineWidth=0.5; ctx.beginPath();
+  for(const id of sysIds){ const s=SYS[id]; const a=proj(s[3],s[4]);
+    const aOn=!(a[0]<-20||a[0]>W+20||a[1]<-20||a[1]>H+20);
+    for(const v of s[6]){ if(v<=id) continue; const t=SYS[v]; if(!t) continue; const b=proj(t[3],t[4]);
+      const bOn=!(b[0]<-20||b[0]>W+20||b[1]<-20||b[1]>H+20); if(!aOn&&!bOn) continue;
+      ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); } }
+  ctx.stroke(); ctx.globalAlpha=1;
   const resSet=new Set(results.map(r=>r.id)); const fullSet=new Set(results.filter(r=>r.covered===r.total).map(r=>r.id));
   for(const id of sysIds){ const s=SYS[id]; const [px,py]=proj(s[3],s[4]);
     if(px<-20||px>W+20||py<-20||py>H+20) continue;            // cull offscreen when zoomed
-    let c='#1b2630', rad=0.7;
-    if(resSet.has(id)){ c=fullSet.has(id)?'#e8d296':'#8a7048'; rad=fullSet.has(id)?2.1:1.4; }
+    let c='#1b2630', rad=2.1;
+    if(resSet.has(id)){ c=fullSet.has(id)?'#e8d296':'#8a7048'; rad=fullSet.has(id)?6.3:4.2; }
     ctx.fillStyle=c; ctx.beginPath(); ctx.arc(px,py,rad,0,7); ctx.fill();
     if(resSet.has(id)) pts.push([px,py,id]); }
   Object.values(colonies).flat().forEach(co=>{ const s=SYS[co.system]; if(!s)return; const [px,py]=proj(s[3],s[4]);
@@ -757,17 +821,18 @@ function drawMap(){ if(!ctx) return; ctx.clearRect(0,0,W,H); pts=[];
   $('legend').innerHTML=`<div><i style="background:#e8d296"></i>full-chain system</div><div><i style="background:#8a7048"></i>partial</div>
     <div><i style="background:#8cc86a"></i>your colony</div><div><i style="background:#a0d0e0"></i>home</div>
     <div style="margin-top:4px;color:var(--muted2)">${sysIds.length} systems · ${zoom.toFixed(1)}×</div>`; }
-function setZoom(f,ax,ay){ const Cx=ax==null?W/2:ax, Cy=ay==null?H/2:ay;
+function setZoom(f,ax,ay){ const Cx=(ax!=null?ax:(lastMx!=null?lastMx:W/2)), Cy=(ay!=null?ay:(lastMy!=null?lastMy:H/2));
   const nz=Math.max(0.5,Math.min(40,zoom*f)); const g=nz/zoom;
   panx = Cx - (Cx - panx)*g; pany = Cy - (Cy - pany)*g; zoom=nz; drawMap(); }
 $('zin').onclick=()=>setZoom(1.4); $('zout').onclick=()=>setZoom(1/1.4);
 $('zreset').onclick=()=>{ zoom=1; panx=0; pany=0; drawMap(); };
 cv.addEventListener('wheel',e=>{ e.preventDefault(); const r=cv.getBoundingClientRect();
-  setZoom(e.deltaY<0?1.12:1/1.12, e.clientX-r.left, e.clientY-r.top); },{passive:false});
+  lastMx=e.clientX-r.left; lastMy=e.clientY-r.top;
+  setZoom(e.deltaY<0?1.12:1/1.12, lastMx, lastMy); },{passive:false});
 // drag to pan, click (no drag) to select
-let dn=false,dragged=false,lx=0,ly=0;
+let dn=false,dragged=false,lx=0,ly=0,lastMx=null,lastMy=null;
 cv.addEventListener('pointerdown',e=>{ dn=true;dragged=false;lx=e.clientX;ly=e.clientY;cv.setPointerCapture(e.pointerId); });
-cv.addEventListener('pointermove',e=>{ const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
+cv.addEventListener('pointermove',e=>{ const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top; lastMx=mx; lastMy=my;
   if(dn){ const dx=e.clientX-lx,dy=e.clientY-ly; if(Math.abs(dx)+Math.abs(dy)>3)dragged=true; panx+=dx;pany+=dy;lx=e.clientX;ly=e.clientY; drawMap(); tip.style.opacity=0; return; }
   if(!pts.length){tip.style.opacity=0;return;} let best=null,bd=64; for(const [px,py,id] of pts){ const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best=id;} }
   if(best!=null){ const [bx,by]=proj(SYS[best][3],SYS[best][4]); tip.style.left=bx+'px'; tip.style.top=by+'px';
