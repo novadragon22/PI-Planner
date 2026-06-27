@@ -555,9 +555,14 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
     <div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);margin-bottom:5px">CREW ROLES</div>
     ${plan.crew.map(c=>{ const prodVal=(charProduct[c.id]&&sel[charProduct[c.id]]!=null)?charProduct[c.id]:(sel[target]!=null?target:selIds[0]);
       const drop=(c.role==='full'&&multi)?`<select class="cprod" data-id="${c.id}" style="width:auto;font-size:11px">${selIds.map(pid=>`<option value="${pid}" ${String(prodVal)===String(pid)?'selected':''}>${PI.recipe[pid].name}</option>`).join('')}</select>`:'';
+      const cs=charSkills[c.id]; let tips=[],short='';
+      if(cs){ if(cs.ic<5) tips.push(`Interplanetary Consolidation ${ROMAN[cs.ic]}→V = up to +${5-cs.ic} planet${5-cs.ic>1?'s':''}`);
+        if(cs.ccu<5){ const g=CCU_BUDGET[5][0]-CCU_BUDGET[cs.ccu][0]; tips.push(`Command Center Upgrades ${ROMAN[cs.ccu]}→V = +${g.toLocaleString()} CPU`); }
+        if(tips.length) short = cs.ic<5?`⬆ +${5-cs.ic} planet${5-cs.ic>1?'s':''}`:'⬆ +CPU'; }
+      const upBadge = short?`<span class="skup" title="${tips.join(' · ')} — training this raises this character's own capacity and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
       return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;flex-wrap:wrap">
-      <span style="flex:1;min-width:120px;font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${c.cap} planets · CPU ${c.bud[0]}</span></span>
-      ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${drop}
+      <span style="font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${c.cap} planets · CPU ${c.bud[0]}</span></span>
+      ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${drop}${upBadge}
     </div>`; }).join('')}
     ${plan.roleNote?`<div class="hint" style="color:var(--amber);margin-top:4px">${plan.roleNote}</div>`:''}
     <div class="hint" style="color:var(--muted2);margin-top:4px">Full = one character runs an entire colony chain (extract → P4) on their own planets${selIds.length>1?'; pick which product from the dropdown':''}.</div></div>`; }
