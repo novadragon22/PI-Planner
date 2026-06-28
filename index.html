@@ -816,7 +816,15 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
       byTier[tr].forEach(prod=>{ const pl=planetFor(prod); const ins=PI.recipe[prod].in.map(([y])=>nm(y)).join('  +  '); const fin=prod===T;
         h+=`<div style="margin:3px 14px;padding:6px 10px;border:1px solid ${fin?'var(--gold-dim)':'var(--line)'};${fin?'background:rgba(201,168,104,.08)':''}">
           <div><b style="color:${fin?'var(--gold-bright)':'var(--cyan-bright)'}">${nm(prod)}</b>${fin?' <span class="hint">· FINAL PRODUCT</span>':''} <span class="hint">@ ${pl?des(pl)+(pl.who?' · '+pl.who:''):'unplaced'}</span></div>
-          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> ${nm(prod)}</div></div>`; }); });
+          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> ${nm(prod)} · storage: 1× Launchpad + 1× Storage Facility${fin?' <span style="color:var(--gold)">(export point)</span>':''}</div></div>`; }); });
+    // storage planning — keep inputs available and final product buffered for return
+    const VOL={0:0.01,1:0.38,2:1.5,3:6,4:100}; const LP=10000, SF=12000;
+    const fvol=VOL[PI.tier[T]]||1; const cf=v=>Math.floor(v).toLocaleString();
+    h+=`<div class="mono" style="font-size:10px;color:var(--gold);letter-spacing:.1em;padding:9px 14px 2px">STORAGE · maximise input availability &amp; product return</div>
+      <div style="margin:3px 14px 8px;padding:7px 10px;border:1px solid var(--line2);background:rgba(201,168,104,.04)" class="hint">
+      <div>• <b style="color:var(--cyan-bright)">P1 deposit buffer</b> (0.38 m³ each): a Launchpad holds ≈ <b>${cf(LP/0.38)}</b> P1, a Storage Facility ≈ <b>${cf(SF/0.38)}</b>. Land deposits on a Launchpad at each P2 planet and add Storage Facilities so the factories never starve between hauls.</div>
+      <div style="margin-top:3px">• <b style="color:var(--gold-bright)">Final product buffer</b> — ${nm(T)} (${fvol} m³): a Launchpad holds ≈ <b>${cf(LP/fvol)}</b> units before launch${finPl?` — accumulate and export from <b>${des(finPl)}</b>`:''}. Add a Storage Facility (≈ ${cf(SF/fvol)} units) if you export less often.</div>
+      <div style="margin-top:3px;color:var(--muted2)">Every factory planet in this plan already carries 1× Launchpad + 1× Storage Facility (in its CPU/PG budget). Spare grid → add Storage Facilities on the busiest planets to extend buffer and uptime.</div></div>`;
     return h; };
   if(logiFactory!=null && items.some(it=>+it.t===+logiFactory)){
     $('resBody').innerHTML=`<tr><td style="padding:0">${layoutHtml(+logiFactory)}</td></tr>`;
