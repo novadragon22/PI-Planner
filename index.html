@@ -412,7 +412,7 @@ function autoFitCrew(plan){ if(!autoFit||!plan.roleMode) return false;
 
 // ---------- product list ----------
 function buildTiers(){ $('tiers').innerHTML=[1,2,3,4].map(t=>`<span class="tier ${t===tier?'on':''}" data-t="${t}">P${t}</span>`).join('');
-  $('tiers').querySelectorAll('.tier').forEach(x=>x.onclick=()=>{ tier=+x.dataset.t; buildTiers(); buildProducts(); }); }
+  $('tiers').querySelectorAll('.tier').forEach(x=>x.onclick=()=>{ tier=+x.dataset.t; saveSettings(); buildTiers(); buildProducts(); }); }
 function buildProducts(){ const ids=Object.keys(PI.recipe).filter(o=>PI.tier[o]===tier).sort((a,b)=>PI.recipe[a].name.localeCompare(PI.recipe[b].name));
   $('prodList').innerHTML=ids.map(o=>`<div class="prod ${target==o?'on':''} ${sel[o]!=null?'sel':''}" data-o="${o}">
     <input type="checkbox" class="psel" data-o="${o}" ${sel[o]!=null?'checked':''} onclick="event.stopPropagation()">
@@ -488,6 +488,7 @@ function multibuyText(items){ return items.map(([t,q])=>`${PI.names[t]}\t${q}`).
 let sel=JSON.parse(localStorage.getItem('pi_sel')||'{}');     // basket: product id -> qty/week
 let lastQty=+(localStorage.getItem('pi_weekly')||100);        // default qty for newly added products
 function saveSel(){ localStorage.setItem('pi_sel',JSON.stringify(sel)); }
+function saveSettings(){ cfg.tier=tier; cfg.secf=secFilter; cfg.whole=whole?1:0; cfg.icov=icOverride; cfg.ccuov=ccuOverride; cfg.home=($('home')&&$('home').value)||''; try{localStorage.setItem('pi_cfg',JSON.stringify(cfg));}catch(e){} }
 let buyHub=+(localStorage.getItem('pi_hub')||60003760);
 let buyP0=localStorage.getItem('pi_bp0')==='1';
 let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
@@ -602,6 +603,7 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
 // ---------- locator ----------
 function compute(){ const p0=basketP0(); if(!p0.length){ results=[]; closestSys=null; drawMap(); renderResults(); return; }
   homeId = nameToId[($('home').value||'').trim().toLowerCase()]||null;
+  saveSettings();
   distCache = homeId?bfs(homeId):{};
   const cand=[];
   for(const id of sysIds){ const s=SYS[id]; const sec=s[1];
@@ -754,8 +756,8 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
   html+=`<div class="hint" style="padding:6px 14px 12px"><b style="color:var(--cyan)">${modeTag}.</b> ${plan.note}</div>`;
   $('resBody').innerHTML=`<tr><td style="padding:0">${html}</td></tr>`;
   $('backList').onclick=()=>{ viewing='list'; renderResults(); };
-  $('icSel').onchange=e=>{ icOverride=+e.target.value; renderColony(); };
-  $('ccuSel').onchange=e=>{ ccuOverride=+e.target.value; renderColony(); };
+  $('icSel').onchange=e=>{ icOverride=+e.target.value; saveSettings(); renderColony(); };
+  $('ccuSel').onchange=e=>{ ccuOverride=+e.target.value; saveSettings(); renderColony(); };
   $('resBody').querySelectorAll('.rolebtn').forEach(b=>b.onclick=()=>setRole(b.dataset.id,b.dataset.r));
   if($('autoFit')) $('autoFit').onchange=e=>{ autoFit=e.target.checked; localStorage.setItem('pi_autofit',autoFit?'1':'0'); renderColony(); };
   $('resBody').querySelectorAll('.cprod').forEach(s=>s.onchange=()=>setCharProduct(s.dataset.id, s.value));
@@ -1017,7 +1019,7 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
       <td class="r mono" style="color:${col};font-weight:600">${pf!=null?fmtIsk(pf):'—'}</td>
       <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`; }).join('');
   $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th>sell/unit</th><th>${inHdr}</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
-  $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
+  $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; saveSettings(); buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
   if(!haveAll && !pricesLoading){ /* auto-load once */ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); }
 }
 
@@ -1100,8 +1102,8 @@ async function loadStandings(id){ try{ const list=await eGet(id,`/characters/${i
   }catch(e){ /* scope may be missing until re-auth */ } }
 
 // ---------- filters ----------
-$('secChips').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ $('secChips').querySelectorAll('.chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); secFilter=c.dataset.s; compute(); });
-$('wholeTgl').onclick=()=>{ whole=!whole; $('wholeTgl').classList.toggle('on',whole); compute(); };
+$('secChips').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ $('secChips').querySelectorAll('.chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); secFilter=c.dataset.s; saveSettings(); compute(); });
+$('wholeTgl').onclick=()=>{ whole=!whole; $('wholeTgl').classList.toggle('on',whole); saveSettings(); compute(); };
 $('home').onchange=()=>compute();
 $('sysdl').innerHTML=sysIds.slice().sort((a,b)=>SYS[a][0].localeCompare(SYS[b][0])).slice(0,4000).map(id=>`<option value="${SYS[id][0]}">`).join('');
 
@@ -1168,6 +1170,15 @@ $('cfgUiRange').oninput=()=>{ $('cfgUi').value=$('cfgUiRange').value; applyUi($(
 setupBounds(); resize(); addEventListener('resize',()=>{resize();fitSide();});
 ['dProd','dMkt'].forEach(id=>{ const d=$(id); if(d) d.addEventListener('toggle',fitSide); });
 requestAnimationFrame(fitSide); setTimeout(fitSide,150);
+// restore previously saved settings (home system, tier, security filter, whole-units, skill overrides)
+if(cfg.tier!=null) tier=cfg.tier;
+if(cfg.secf!=null) secFilter=cfg.secf;
+if(cfg.whole!=null) whole=!!cfg.whole;
+if(cfg.icov!=null) icOverride=cfg.icov;
+if(cfg.ccuov!=null) ccuOverride=cfg.ccuov;
+if(cfg.home && $('home')) $('home').value=cfg.home;
+if($('secChips')) $('secChips').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.dataset.s===secFilter));
+if($('wholeTgl')) $('wholeTgl').classList.toggle('on', whole);
 buildTiers(); buildProducts(); renderResults(); renderAuth();
 // restore a saved basket: focus the first selected product, show its tier, and load prices/shopping list
 (function(){ const k=Object.keys(sel); if(k.length){ target=k[0]; if(PI.tier[target]) { tier=PI.tier[target]; buildTiers(); } buildProducts(); renderReq(); compute(); loadHubPrices(); } else { renderProcure(); } })();
