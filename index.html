@@ -773,23 +773,31 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const exRows=plan.planets.filter(isExtractor).sort((a,b)=>(a.sys-b.sys)||(pnum.get(a)-pnum.get(b))).map(p=>{
     const prods=(p.outs||[]).map(t=>PI.names[t]||t).join(', ')||'<span class="hint">—</span>';
     const cons=consumersOf(p);
-    const dest = cons.length? cons.map(q=>{ const cross=q.sys!==p.sys;
+    const dest = cons.length? [...new Set(cons.map(q=>{ const cross=q.sys!==p.sys;
         return (cross || !sameCrew(q,p))
           ? `<b style="color:var(--amber)">${sn(q.sys)} transfer to ${q.who||'?'}</b> <span class="hint">(${whoRole[q.whoId]||'—'})${cross?' · haul':''}</span>`
-          : `${sn(q.sys)} → <span class="hint">own factory ${des(q)}</span>`; }).join('<br>')
+          : `${sn(q.sys)} → <span class="hint">own factory ${des(q)}</span>`; }))].join('<br>')
       : '<span style="color:var(--green)">Export / market</span>';
     return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)}</td><td>${prods}</td><td>${p.who||'<span class="hint">unassigned</span>'}</td><td>${dest}</td></tr>`; }).join('');
   // ---- PRODUCTION · Factory ----
-  const facRows=plan.planets.filter(isFactory).sort((a,b)=>(a.sys-b.sys)||(pnum.get(a)-pnum.get(b))).map(p=>{
-    const deposit=(p.ins||[]).map(t=>PI.names[t]||t).join(', ')|| (p.kind==='basic'?'<span class="hint">raw P0 (imported)</span>':'<span class="hint">—</span>');
-    const makes=(p.outs||[]).map(t=>PI.names[t]||t).join(', ')||'<span class="hint">—</span>';
-    return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px">${sn(p.sys)}</td><td>${deposit}</td><td style="color:var(--gold-bright)">${des(p)} · ${crewRole(p)}</td><td style="color:var(--cyan-bright)">${makes}</td></tr>`; }).join('');
+  const exOuts=new Set(); plan.planets.filter(isExtractor).forEach(p=>(p.outs||[]).forEach(t=>exOuts.add(t)));
+  const facPlanets=plan.planets.filter(isFactory);
+  const facCrew=[...new Set(facPlanets.map(p=>String(p.whoId)))]; const multiFac=facCrew.length>1;
+  const targetName=PI.recipe[target]?PI.recipe[target].name:(PI.names[target]||target);
+  const facByCrew=new Map(); facPlanets.forEach(p=>{ const k=String(p.whoId); if(!facByCrew.has(k)) facByCrew.set(k,[]); facByCrew.get(k).push(p); });
+  const facRows=[...facByCrew.values()].sort((a,b)=>(a[0].sys-b[0].sys)||(pnum.get(a[0])-pnum.get(b[0]))).map(group=>{
+    const loc=[...new Set(group.map(des))].join(', ');
+    const who=group[0].who||'unassigned'; const role=whoRole[group[0].whoId]||'—';
+    const dep=new Set(); group.forEach(p=>(p.ins||[]).forEach(t=>{ if(exOuts.has(t)) dep.add(t); }));
+    const depTxt=[...dep].map(t=>PI.names[t]||t).join(', ')||'<span class="hint">—</span>';
+    const atPlanet = multiFac ? `${loc} · <b style="color:var(--cyan)">${who}</b> <span class="hint">(${role})</span>` : `${loc} · <b style="color:var(--cyan)">${who}</b>`;
+    return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${loc}</td><td>${depTxt}</td>${multiFac?`<td>${atPlanet}</td>`:''}<td style="color:var(--cyan-bright)">${targetName}</td></tr>`; }).join('');
   const head=`<div style="display:flex;align-items:center;gap:8px;padding:8px 14px 4px"><b>${sn(sysL)} route</b><span class="hint">${plan.planets.length} planets</span>
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY</div>
-    <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">System</td><td>Deposit at planet</td><td>At planet · crew (role)</td><td>Produces</td></tr>${facRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
+    <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">System</td><td>Deposit (from extractors)</td>${multiFac?'<td>At planet · crew (role)</td>':''}<td>Produces</td></tr>${facRows||`<tr><td colspan="${multiFac?4:3}" class="hint" style="padding:6px 10px">none</td></tr>`}</table>`;
   $('resBody').innerHTML=`<tr><td style="padding:0">${head}${exTbl}${facTbl}<div class="hint" style="padding:8px 14px;color:var(--muted2)">Extractors: each planet, the P1 it makes, its pilot, and the pilot the output transfers to. Factory: the products deposited at each factory planet and the product it makes. Planet numbers are the plan's per-system index in Roman (not the live in-game celestial number, which isn't in the dataset).</div></td></tr>`;
   $('logiExp').onclick=()=>exportRoute(sysL); wireImport('logiImp'); }
 function routeText(sysL){ const data={ v:1, app:'eve-pi-planner', kind:'colony-logistics', generated:new Date().toISOString(),
@@ -804,10 +812,15 @@ function routeText(sysL){ const data={ v:1, app:'eve-pi-planner', kind:'colony-l
   const cons=p=>{ const s=new Set(); (p.outs||[]).forEach(t=>(plan.planets||[]).forEach(q=>{ if((q.ins||[]).includes(t)) s.add(q); })); return [...s]; };
   const isEx=p=>p.kind==='extract'||p.kind==='feeder'; const isFa=p=>p.kind==='factory'||p.kind==='basic';
   const ex=(plan?plan.planets:[]).filter(isEx).map(p=>{ const prods=(p.outs||[]).map(t=>PI.names[t]||t).join(', ');
-    const d=cons(p).map(q=>(q.sys!==p.sys||!same(q,p))?`${sn(q.sys)} transfer to ${q.who||'?'}`:`own factory ${des(q)}`).join('; ')||'Export/market';
+    const d=[...new Set(cons(p).map(q=>(q.sys!==p.sys||!same(q,p))?`${sn(q.sys)} transfer to ${q.who||'?'}`:`own factory ${des(q)}`))].join('; ')||'Export/market';
     return `  ${des(p)} / ${p.who||'unassigned'}: ${prods}  ->  ${d}`; }).join('\n');
-  const fa=(plan?plan.planets:[]).filter(isFa).map(p=>{ const dep=(p.ins||[]).map(t=>PI.names[t]||t).join(', ')||(p.kind==='basic'?'raw P0':'—');
-    return `  ${sn(p.sys)} · deposit at ${des(p)} / ${p.who||'unassigned'}: ${dep}  ->  makes ${(p.outs||[]).map(t=>PI.names[t]||t).join(', ')}`; }).join('\n');
+  const exOuts=new Set(); (plan?plan.planets:[]).filter(isEx).forEach(p=>(p.outs||[]).forEach(t=>exOuts.add(t)));
+  const facP=(plan?plan.planets:[]).filter(isFa); const facCrew=[...new Set(facP.map(p=>String(p.whoId)))]; const multiFac=facCrew.length>1;
+  const tName=PI.recipe[target]?PI.recipe[target].name:(PI.names[target]||target);
+  const facByCrew=new Map(); facP.forEach(p=>{ const k=String(p.whoId); if(!facByCrew.has(k))facByCrew.set(k,[]); facByCrew.get(k).push(p); });
+  const fa=[...facByCrew.values()].map(group=>{ const loc=[...new Set(group.map(des))].join(', ');
+    const dep=new Set(); group.forEach(p=>(p.ins||[]).forEach(t=>{ if(exOuts.has(t)) dep.add(t); }));
+    const who=group[0].who||'unassigned'; return `  ${loc} · ${who}${multiFac?' ('+(({extract:'Extractor',factory:'Factory',full:'Full'})[(plan.crew.find(c=>String(c.id)===String(group[0].whoId))||{}).role]||'')+')':''}: deposit ${[...dep].map(t=>PI.names[t]||t).join(', ')||'—'}  ->  produces ${tName}`; }).join('\n');
   const man=`PRODUCTION · EXTRACTORS\n${ex||'  (none)'}\n\nPRODUCTION · FACTORY\n${fa||'  (none)'}`;
   return `EVE PI Planner — Colony Logistics Route
 Generated: ${data.generated}
