@@ -354,7 +354,7 @@ function colonyPlan(target,sysId){
 }
 
 // ---------- state ----------
-let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null, feederMark=null;
+let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null, feederMark=null, logiFactory=null;
 let icOverride=5, ccuOverride=5, viewing='list';
 let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; let charLoc={}; let closestSys=null; let baseSuggest=[];
 let charSkills={}; // id -> {ic,ccu} per character (from ESI)
@@ -744,7 +744,7 @@ function renderNav(){ const n=$('navView'); if(!n) return; const grp=(viewing===
   n.querySelectorAll('.navbtn').forEach(x=>x.onclick=()=>setView(x.dataset.v)); }
 function setView(v){ if(v==='mine'){ viewing='mine'; renderMine(); }
   else if(v==='make'){ viewing='make'; renderMake(); }
-  else if(v==='logi'){ viewing='logi'; renderLogistics(); }
+  else if(v==='logi'){ viewing='logi'; logiFactory=null; renderLogistics(); }
   else { viewing= chosen?'colony':'list'; if(viewing==='colony') renderColony(); else renderResults(); }
   drawMap(); }
 // ---------- colony logistics: production → transfer routing ----------
@@ -788,7 +788,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const facCrew=[...new Set(items.map(x=>String(x.p.whoId)))]; const multiFac=facCrew.length>1;
   const facRowFor=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts.size||exOuts.has(x));
     const depTxt=deps.map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
-    return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)}</td></tr>`; };
+    return `<tr class="facrow" data-fac="${it.t}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)} <span class="hint">▸ layout</span></td></tr>`; };
   let facRows;
   if(multiFac){ const groups=new Map(); items.forEach(it=>{ const k=String(it.p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(it); });
     facRows=[...groups.values()].map(g=>{ const who=g[0].p.who||'unassigned'; const role=whoRole[g[0].p.whoId]||'—';
@@ -799,10 +799,34 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY</div>
+  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· click a product for its build layout</span></div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Produces</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  $('resBody').innerHTML=`<tr><td style="padding:0">${head}${exTbl}${facTbl}<div class="hint" style="padding:8px 14px;color:var(--muted2)">Extractors: each planet, the P1 it makes, its pilot, and the pilot the output transfers to. Factory: the products deposited at each factory planet and the product it makes. Planet numbers are the plan's per-system index in Roman (not the live in-game celestial number, which isn't in the dataset).</div></td></tr>`;
-  $('logiExp').onclick=()=>exportRoute(sysL); wireImport('logiImp'); }
+  // ----- drill-down: full build layout for one final product -----
+  const layoutHtml=T=>{ const nm=t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t);
+    const byTier={}, seen=new Set();
+    (function rec(x){ x=+x; const r=PI.recipe[x]; if(!r) return; const tr=PI.tier[x];
+      if(tr>=2 && !seen.has(x)){ seen.add(x); (byTier[tr]=byTier[tr]||[]).push(x); } r.in.forEach(([y])=>rec(+y)); })(T);
+    const planetFor=prod=>plan.planets.find(p=>(p.outs||[]).map(Number).includes(+prod));
+    const finPl=planetFor(T);
+    let h=`<div style="padding:8px 14px;display:flex;align-items:center;gap:10px"><span id="logiBack" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--cyan)">‹ back to route</span>
+      <b style="color:var(--gold-bright)">Factory layout · ${nm(T)}</b>${finPl&&finPl.who?`<span class="hint">${finPl.who}${whoRole[finPl.whoId]?' ('+whoRole[finPl.whoId]+')':''}</span>`:''}</div>
+      <div style="margin:2px 14px 6px;padding:8px 10px;border:1px solid var(--line2);background:rgba(122,184,200,.05)"><div class="mono" style="font-size:10px;color:var(--gold);letter-spacing:.1em">INITIAL DEPOSIT · from extractors</div><div style="margin-top:3px;color:var(--cyan-bright)">${p1Leaves(T).map(nm).join('  ·  ')||'—'}</div></div>`;
+    Object.keys(byTier).map(Number).sort((a,b)=>a-b).forEach(tr=>{
+      h+=`<div class="mono" style="font-size:10px;color:var(--gold-dim);letter-spacing:.1em;padding:7px 14px 2px">TIER P${tr}</div>`;
+      byTier[tr].forEach(prod=>{ const pl=planetFor(prod); const ins=PI.recipe[prod].in.map(([y])=>nm(y)).join('  +  '); const fin=prod===T;
+        h+=`<div style="margin:3px 14px;padding:6px 10px;border:1px solid ${fin?'var(--gold-dim)':'var(--line)'};${fin?'background:rgba(201,168,104,.08)':''}">
+          <div><b style="color:${fin?'var(--gold-bright)':'var(--cyan-bright)'}">${nm(prod)}</b>${fin?' <span class="hint">· FINAL PRODUCT</span>':''} <span class="hint">@ ${pl?des(pl)+(pl.who?' · '+pl.who:''):'unplaced'}</span></div>
+          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> ${nm(prod)}</div></div>`; }); });
+    return h; };
+  if(logiFactory!=null && items.some(it=>+it.t===+logiFactory)){
+    $('resBody').innerHTML=`<tr><td style="padding:0">${layoutHtml(+logiFactory)}</td></tr>`;
+    if($('logiBack')) $('logiBack').onclick=()=>{ logiFactory=null; renderLogistics(); };
+    return;
+  }
+  logiFactory=null;
+  $('resBody').innerHTML=`<tr><td style="padding:0">${head}${exTbl}${facTbl}<div class="hint" style="padding:8px 14px;color:var(--muted2)">Extractors: each planet, the P1 it makes, its pilot, and the pilot the output transfers to. Factory: click any product to see its full build layout from deposit to final. Planet numbers are the plan's per-system Roman index (not the live celestial number, which isn't in the dataset).</div></td></tr>`;
+  $('logiExp').onclick=()=>exportRoute(sysL); wireImport('logiImp');
+  $('resBody').querySelectorAll('.facrow').forEach(r=>r.onclick=()=>{ logiFactory=+r.dataset.fac; renderLogistics(); }); }
 function routeText(sysL){ const data={ v:1, app:'eve-pi-planner', kind:'colony-logistics', generated:new Date().toISOString(),
     home:($('home').value||'').trim(), staging: sysL&&SYS[sysL]?SYS[sysL][0]:'', sellMode, buyP0, buyP1, allProducts,
     products:Object.keys(sel).map(id=>({id:+id,name:PI.recipe[id]?PI.recipe[id].name:String(id),qty:sel[id]})) };
