@@ -779,19 +779,22 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
           : `${sn(q.sys)} → <span class="hint">own factory ${des(q)}</span>`; }))].join('<br>')
       : '<span style="color:var(--green)">Export / market</span>';
     return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)}</td><td>${prods}</td><td>${p.who||'<span class="hint">unassigned</span>'}</td><td>${dest}</td></tr>`; }).join('');
-  // ---- PRODUCTION · Factory : per-planet rows (deposits → produces); multi-pilot groups under a crew header ----
+  // ---- PRODUCTION · Factory : per final product — the extractor P1s it requires → the final product; grouped by pilot ----
   const facPlanets=plan.planets.filter(isFactory);
-  const facCrew=[...new Set(facPlanets.map(p=>String(p.whoId)))]; const multiFac=facCrew.length>1;
-  const facRowFor=p=>{ const depTxt=(p.ins||[]).map(t=>PI.names[t]||t).join(', ')||(p.kind==='basic'?'<span class="hint">raw P0 (imported)</span>':'<span class="hint">—</span>');
-    const makesTxt=(p.outs||[]).map(t=>PI.names[t]||t).join(', ')||'<span class="hint">—</span>';
-    return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${makesTxt}</td></tr>`; };
+  const exOuts=new Set(); plan.planets.filter(isExtractor).forEach(p=>(p.outs||[]).forEach(t=>exOuts.add(+t)));
+  const p1Leaves=tid=>{ const out=new Set(); (function rec(x){ const r=PI.recipe[x]; if(!r) return; r.in.forEach(([y])=>{ y=+y; if(PI.tier[y]===1) out.add(y); else rec(String(y)); }); })(String(tid)); return [...out]; };
+  const targets=(allProducts&&Object.keys(sel).length)?Object.keys(sel).map(Number):[target];
+  const items=targets.map(t=>({t, p:facPlanets.find(pp=>(pp.outs||[]).map(Number).includes(+t))})).filter(x=>x.p);
+  const facCrew=[...new Set(items.map(x=>String(x.p.whoId)))]; const multiFac=facCrew.length>1;
+  const facRowFor=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts.size||exOuts.has(x));
+    const depTxt=deps.map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
+    return `<tr style="border-top:1px solid var(--line);vertical-align:top"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)}</td></tr>`; };
   let facRows;
-  if(multiFac){ const groups=new Map(); facPlanets.forEach(p=>{ const k=String(p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(p); });
-    facRows=[...groups.values()].sort((a,b)=>(a[0].sys-b[0].sys)||(pnum.get(a[0])-pnum.get(b[0]))).map(g=>{
-      const who=g[0].who||'unassigned'; const role=whoRole[g[0].whoId]||'—';
+  if(multiFac){ const groups=new Map(); items.forEach(it=>{ const k=String(it.p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(it); });
+    facRows=[...groups.values()].map(g=>{ const who=g[0].p.who||'unassigned'; const role=whoRole[g[0].p.whoId]||'—';
       const hdr=`<tr style="background:rgba(201,168,104,.06)"><td colspan="3" style="padding:5px 10px;color:var(--cyan)"><b>${who}</b> <span class="hint">(${role})</span></td></tr>`;
-      return hdr+g.slice().sort((a,b)=>(a.sys-b.sys)||(pnum.get(a)-pnum.get(b))).map(facRowFor).join(''); }).join('');
-  } else { facRows=facPlanets.slice().sort((a,b)=>(a.sys-b.sys)||(pnum.get(a)-pnum.get(b))).map(facRowFor).join(''); }
+      return hdr+g.map(facRowFor).join(''); }).join('');
+  } else { facRows=items.map(facRowFor).join(''); }
   const head=`<div style="display:flex;align-items:center;gap:8px;padding:8px 14px 4px"><b>${sn(sysL)} route</b><span class="hint">${plan.planets.length} planets</span>
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
@@ -814,14 +817,19 @@ function routeText(sysL){ const data={ v:1, app:'eve-pi-planner', kind:'colony-l
   const ex=(plan?plan.planets:[]).filter(isEx).map(p=>{ const prods=(p.outs||[]).map(t=>PI.names[t]||t).join(', ');
     const d=[...new Set(cons(p).map(q=>(q.sys!==p.sys||!same(q,p))?`${sn(q.sys)} transfer to ${q.who||'?'}`:`own factory ${des(q)}`))].join('; ')||'Export/market';
     return `  ${des(p)} / ${p.who||'unassigned'}: ${prods}  ->  ${d}`; }).join('\n');
-  const facP=(plan?plan.planets:[]).filter(isFa); const facCrew=[...new Set(facP.map(p=>String(p.whoId)))]; const multiFac=facCrew.length>1;
+  const facP=(plan?plan.planets:[]).filter(isFa);
+  const exOuts2=new Set(); (plan?plan.planets:[]).filter(isEx).forEach(p=>(p.outs||[]).forEach(t=>exOuts2.add(+t)));
+  const p1Leaves=tid=>{ const out=new Set(); (function rec(x){ const r=PI.recipe[x]; if(!r) return; r.in.forEach(([y])=>{ y=+y; if(PI.tier[y]===1) out.add(y); else rec(String(y)); }); })(String(tid)); return [...out]; };
+  const targets=(allProducts&&Object.keys(sel).length)?Object.keys(sel).map(Number):[target];
+  const items=targets.map(t=>({t,p:facP.find(pp=>(pp.outs||[]).map(Number).includes(+t))})).filter(x=>x.p);
+  const facCrew=[...new Set(items.map(x=>String(x.p.whoId)))]; const multiFac=facCrew.length>1;
   const roleOf=p=>({extract:'Extractor',factory:'Factory',full:'Full'})[(plan.crew.find(c=>String(c.id)===String(p.whoId))||{}).role]||'';
-  const facLine=p=>`    ${des(p)}: deposit ${(p.ins||[]).map(t=>PI.names[t]||t).join(', ')||(p.kind==='basic'?'raw P0':'—')}  ->  produces ${(p.outs||[]).map(t=>PI.names[t]||t).join(', ')||'—'}`;
+  const facLine=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts2.size||exOuts2.has(x)).map(x=>PI.names[x]||x).join(', ')||'—';
+    return `    ${des(it.p)}: deposit ${deps}  ->  produces ${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)}`; };
   let fa;
-  if(multiFac){ const groups=new Map(); facP.forEach(p=>{ const k=String(p.whoId); if(!groups.has(k))groups.set(k,[]); groups.get(k).push(p); });
-    fa=[...groups.values()].map(g=>{ const who=g[0].who||'unassigned'; const r=roleOf(g[0]);
-      return `  ${who}${r?' ('+r+')':''}:\n`+g.slice().sort((a,b)=>(a.sys-b.sys)||(pn.get(a)-pn.get(b))).map(facLine).join('\n'); }).join('\n');
-  } else { fa=facP.slice().sort((a,b)=>(a.sys-b.sys)||(pn.get(a)-pn.get(b))).map(p=>facLine(p).slice(2)).join('\n'); }
+  if(multiFac){ const groups=new Map(); items.forEach(it=>{ const k=String(it.p.whoId); if(!groups.has(k))groups.set(k,[]); groups.get(k).push(it); });
+    fa=[...groups.values()].map(g=>{ const who=g[0].p.who||'unassigned'; const r=roleOf(g[0].p); return `  ${who}${r?' ('+r+')':''}:\n`+g.map(facLine).join('\n'); }).join('\n');
+  } else { fa=items.map(it=>facLine(it).slice(2)).join('\n'); }
   const man=`PRODUCTION · EXTRACTORS\n${ex||'  (none)'}\n\nPRODUCTION · FACTORY\n${fa||'  (none)'}`;
   return `EVE PI Planner — Colony Logistics Route
 Generated: ${data.generated}
