@@ -295,6 +295,9 @@ function colonyPlan(target,sysId){
   const planets=[]; const unassigned=[];
   const advIns=arr=>{ const s=new Set(); arr.forEach(o=>{ const r=PI.recipe[o]; if(r) r.in.forEach(([x])=>s.add(+x)); }); return [...s]; };
   const P4SET=['B','T']; // High-Tech (P4) plants may only sit on Barren or Temperate planets
+  const hasP4plan=planProds.some(t=>PI.tier[t]>=4);
+  // B/T is only worth reserving for P4 when the SAME pilot does both extraction and P4 (single-char shared mode, or a full-role pilot).
+  // Different pilots have independent colony allotments and can share a planet, so their extraction never blocks another pilot's P4.
   const facLine=made=>{ const advm=made.filter(o=>PI.tier[o]<4), htm=made.filter(o=>PI.tier[o]>=4); const parts=[];
     if(advm.length) parts.push(`${advm.length}× Advanced Industry Facility → ${advm.map(o=>PI.recipe[o].name).join(', ')}`);
     if(htm.length) parts.push(`${htm.length}× High-Tech Production Plant → ${htm.map(o=>PI.recipe[o].name).join(', ')}`);
@@ -330,7 +333,7 @@ function colonyPlan(target,sysId){
     const packAdvL=()=>{ if(PI.tier[prod]>=4) packL(advl.slice(),'adv',P4SET); else packL(advl.slice(),'adv',null,P4SET); };
     if(buyP1){ packAdvL(); }
     else if(buyP0){ packL(p1l.slice(),'basic'); packAdvL(); }
-    else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,P4SET); if(!got) continue;
+    else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,(PI.tier[prod]>=4)?P4SET:null); if(!got) continue;
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p)); const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu,pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg; let basics=0; while(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB&&basics<8){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;basics++;}
         res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       packAdvL(); }
@@ -348,7 +351,7 @@ function colonyPlan(target,sysId){
     note='Self-sufficient layout: extractor planets (ECU + heads + Basic facilities) feed factory planets running Advanced facilities. Tune extractor heads to your survey rate; links also use CPU/PG.';
     if(buildShared){ for(const p of p0){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]);
       const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
-      const got=claim(cw.id,codes,P4SET);
+      const got=claim(cw.id,codes,(!roleMode && hasP4plan)?P4SET:null);
       if(!got){ unassigned.push(p); continue; }
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
       const heads=8; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
