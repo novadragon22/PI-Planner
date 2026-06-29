@@ -273,6 +273,7 @@ function colonyPlan(target,sysId){
   const _p0=new Set(), _p1=new Set(), _adv=new Set();
   planProds.forEach(t=>{ p0NeedsFor(t).forEach(p=>_p0.add(p)); chainTiers(t).forEach(o=>{ if(PI.tier[o]==1)_p1.add(o); else if(PI.tier[o]>=2)_adv.add(o); }); });
   const p0=[..._p0]; const p1Outs=[..._p1]; const advOuts=[..._adv];
+  const finalSet=new Set(planProds.map(Number));   // the targeted final products (each gets its own Storage Facility when sharing a planet, budget permitting)
   const [cpuB0,pgB0]=CCU_BUDGET[ccuOverride];   // fallback budget (single-char / overflow)
   // crew: role-based assignment kicks in with 2+ logged-in characters
   const ids=Object.keys(chars);
@@ -292,7 +293,7 @@ function colonyPlan(target,sysId){
   const poolOf=sid=>{ if(poolCache[sid]) return poolCache[sid]; const s=(typeof SYSPL!=='undefined')?SYSPL[sid]:'';
     const arr = s ? [...s].map((c,i)=>({ci:i+1,code:c})) : (()=>{ const a=[]; let i=1; const hv=SYS[sid]?SYS[sid][5]:{}; for(const c in hv){ for(let k=0;k<hv[c];k++) a.push({ci:i++,code:c}); } return a; })();
     return poolCache[sid]=arr; };
-  const ownerClaimedSys={}; let overflow=false, p4overflow=false, extOver=0, facOver=0;
+  const ownerClaimedSys={}; let overflow=false, p4overflow=false, extOver=0, facOver=0, extNeed=0;
   const CAP = consolidate?24:10; // max facilities packed onto one planet before starting another
   const claimIn=(sid,ownerId,codes,avoid)=>{ const k=sid+'|'+ownerId; const u=ownerClaimedSys[k]||(ownerClaimedSys[k]=new Set());
     for(let pass=0;pass<2;pass++){ for(const pl of poolOf(sid)){ if(u.has(pl.ci)) continue; if(codes && codes.indexOf(pl.code)<0) continue;
@@ -312,6 +313,11 @@ function colonyPlan(target,sysId){
     if(advm.length) parts.push(`${advm.reduce((s,o)=>s+cnt[o],0)}× Advanced Industry Facility → ${advm.map(lab).join(', ')}`);
     if(htm.length) parts.push(`${htm.reduce((s,o)=>s+cnt[o],0)}× High-Tech Production Plant → ${htm.map(lab).join(', ')}`);
     return parts.join('<br>'); };
+  // give each distinct targeted final product on a planet its own Storage Facility, as long as CPU/PG allow (the base 1 storage covers the first final)
+  const addStores=(made,cpu,pg,cpuB,pgB)=>{ const nf=new Set(made.filter(o=>finalSet.has(+o))).size; let stores=1;
+    for(let i=1;i<nf;i++){ if(cpu+FAC.store.cpu<=cpuB && pg+FAC.store.pg<=pgB){ cpu+=FAC.store.cpu; pg+=FAC.store.pg; stores++; } else break; }
+    return {stores,cpu,pg}; };
+  const storeLine=stores=>`<br>1× Launchpad · ${stores}× Storage Facility`;
   const packFac=(rem,kind,getCrew,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic; const fname=kind==='adv'?'Advanced':'Basic';
     const sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
     while(rem.length){ const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
@@ -319,9 +325,10 @@ function colonyPlan(target,sysId){
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
+      const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
       planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id, sys:sysId, kind:kind==='adv'?'factory':'basic', pcode:code, ci:pick?pick.ci:null,
         outs:[...new Set(made)], fcount, ins:kind==='adv'?advIns(made):[],
-        fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,
+        fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}${storeLine(st.stores)}`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
   // nearest systems (by jumps from the colony) that still have a free Barren/Temperate planet for this owner — for P4 overflow
@@ -339,8 +346,9 @@ function colonyPlan(target,sysId){
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=PI.tier[o]>=4?FAC.htech:FAC.adv; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
+      const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
       planets.push({title:`${PNAME2[pick.code]} (factory)${outpost?' · '+SYS[psys][0]+' (P4 outpost)':''}`, sub: outpost?`P4 High-Tech plant — ${SYS[psys][0]} · ${jumps} jump${jumps!==1?'s':''} from main`:'P3 → P4 · High-Tech plant (Barren/Temperate)', who:cw.name, whoId:cw.id, sys:psys, kind:'factory', pcode:pick.code, ci:pick.ci, p4outpost:outpost,
-        outs:[...new Set(made)], fcount, ins:advIns(made), fac:`${facLine(made)}<br>1× Launchpad · 1× Storage Facility`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        outs:[...new Set(made)], fcount, ins:advIns(made), fac:`${facLine(made)}${storeLine(st.stores)}`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
   // pack advanced facilities. Only the High-Tech Production Plant (P4 manufacture) is fixed to Barren/Temperate;
   // the Advanced Industry Facilities making P1→P2→P3 can sit on ANY planet type (we prefer non-B/T to reserve B/T for the P4 plants).
@@ -361,7 +369,8 @@ function colonyPlan(target,sysId){
       while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; else facOver++; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
         while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB&&pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
         const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
-        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
+        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}${storeLine(st.stores)}`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
         if(res.length>60)break; } };
     const packAdvL=()=>{ const p4=advl.filter(o=>PI.tier[o]>=4), low=advl.filter(o=>PI.tier[o]<4);
       if(low.length) packL(low.slice(),'adv',null,P4SET);   // P2/P3 Advanced facilities → any planet (avoid B/T)
@@ -386,9 +395,13 @@ function colonyPlan(target,sysId){
   } else { mode='extract';
     note=(buyP0?'Buying raw P0 from the market, but P1 is still made on the extractor planets (Basic facilities are only built where the Extractor Control Unit is). ':'Self-sufficient layout: extractor planets (ECU + heads + Basic facilities) extract P0 and make its P1 on the SAME planet. ')+'Factory planets run Advanced facilities on the P1. Tune extractor heads to your survey rate; links also use CPU/PG.';
     const p1Need = consolidate ? facBalance(planProds.map(Number)) : null; // balanced Basic-facility demand per P1
+    // basics-per-planet at a representative extractor budget — used for a stable "planets needed" estimate
+    const bppOf=([cpuB,pgB])=>{ let cpu=FAC.launch.cpu,pg=FAC.launch.pg,b=0,hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh>0){cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu;pg+=FAC.ecu.pg+hh*FAC.ecu.headPg;} while(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;b++;} return Math.max(1,b); };
+    const _repBud=(extractors[0]&&extractors[0].bud)||(fulls[0]&&fulls[0].bud)||[cpuB0,pgB0]; const bpp=bppOf(_repBud);
     if(buildShared){ for(const p of p0){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]);
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
       let want = (consolidate && p1) ? Math.max(1, Math.round(p1Need[p1]||1)) : null; // total Basic facilities to build for this P1 (null → one planet, filled to budget)
+      if(codes.length) extNeed += (want!=null ? Math.max(1, Math.ceil(want/bpp)) : 1); // distinct extractor planets this coverable P0 needs
       let placedAny=false, lastBasics=8;
       while(true){ const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
         const got=claim(cw.id,codes,(!roleMode && hasP4plan)?P4SET:null);
@@ -442,13 +455,20 @@ function colonyPlan(target,sysId){
     if(hasExtractWork&&!extractors.length&&!fulls.length) roleNote+=' No character is set to Extractor.'; }
   if(p4outpostInfo&&p4outpostInfo.length) roleNote+=` ${SYS[sysId][0]} ran out of free Barren/Temperate planets for P4 — extra High-Tech plants build in the nearest system(s): ${p4outpostInfo.map(o=>SYS[o.id][0]+' ('+o.jumps+'j)').join(', ')} (haul P3 there).`;
   if(p4overflow) roleNote+=` P4 (High-Tech) production needs a free Barren or Temperate planet, but none is available here or nearby — free one up, move P4 to another character, or use a second system.`;
-  else if(overflow){ const nExt=extractors.length+fulls.length, nFac=factories.length+fulls.length; const bits=[];
+  else if(overflow){ if(roleMode){
+    const capOf=arr=>arr.reduce((s,c)=>s+Math.min(c.cap, POOL.length),0);
+    const extArr=extractors.concat(fulls), facArr=factories.concat(fulls);
+    const extCap=capOf(extArr), facCap=capOf(facArr);
+    const facNeed=planets.filter(p=>p.kind==='factory').length+facOver;
+    const extShort=Math.max(0, extNeed-extCap), facShort=Math.max(0, facNeed-facCap);
+    const nExt=extArr.length, nFac=facArr.length; const bits=[];
     const trainOf=arr=>arr.reduce((s,c)=>{ const cs=charSkills[c.id]; return s+(cs&&cs.ic<5?(5-cs.ic):0); },0);
     const roomNames=arr=>arr.filter(c=>{ const cs=charSkills[c.id]; return cs&&cs.ic<5; }).map(c=>c.name);
     const trainTxt=(arr,short)=>{ const cap=trainOf(arr); if(cap<=0) return ''; const nm=roomNames(arr); return ` Or improving Interplanetary Consolidation toward V on ${nm.length} pilot${nm.length!==1?'s':''} that still ${nm.length!==1?'have':'has'} room (${nm.join(', ')}) adds +${cap} planet${cap!==1?'s':''} of capacity — covering up to ${Math.min(short,cap)} of these without another pilot.`; };
-    if(extOver>0){ const arr=extractors.concat(fulls); bits.push(`The <b>Extractor</b> role is short <b>${extOver}</b> planet${extOver>1?'s':''}${roleMode?` — your ${nExt} extractor pilot${nExt!==1?'s':''} can't host all the extraction/P1 here`:` — too many extraction planets for one character`}. Add ${roleMode&&nExt?'another':'an'} Extractor pilot or use a second system.${trainTxt(arr,extOver)}`); }
-    if(facOver>0){ const arr=factories.concat(fulls); bits.push(`The <b>Factory</b> role is short <b>${facOver}</b> planet${facOver>1?'s':''}${roleMode?` — your ${nFac} factory pilot${nFac!==1?'s':''} can't put every Advanced facility on its own planet`:` — too many factory planets for one character`}. Add ${roleMode&&nFac?'another':'a'} Factory pilot or use a second system.${trainTxt(arr,facOver)}`); }
-    roleNote += bits.length ? ' '+bits.join(' ') : ` This colony needs more planets than ${SYS[sysId][0]} has (${POOL.length}) — split production across more characters or a second system.`; }
+    if(extShort>0){ bits.push(`The <b>Extractor</b> role is short <b>${extShort}</b> planet${extShort>1?'s':''} — your ${nExt} extractor pilot${nExt!==1?'s':''} can host ${extCap} of the ${extNeed} extraction planet${extNeed>1?'s':''} needed here. Add ${nExt?'another':'an'} Extractor pilot or use a second system.${trainTxt(extArr,extShort)}`); }
+    if(facShort>0){ bits.push(`The <b>Factory</b> role is short <b>${facShort}</b> planet${facShort>1?'s':''} — your ${nFac} factory pilot${nFac!==1?'s':''} can host ${facCap} of the ${facNeed} factory planet${facNeed>1?'s':''} needed here. Add ${nFac?'another':'a'} Factory pilot or use a second system.${trainTxt(facArr,facShort)}`); }
+    roleNote += bits.length ? ' '+bits.join(' ') : ` This colony needs more planets than ${SYS[sysId][0]} has (${POOL.length}) — split production across more characters or a second system.`;
+  } else { roleNote += ` This colony needs more planets than one character can run here (${POOL.length} in ${SYS[sysId][0]}) — add another character or use a second system.`; } }
   return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length,feederInfo,overflow,p4overflow,p4outpostInfo,extOver,facOver};
 }
 
