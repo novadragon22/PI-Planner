@@ -631,13 +631,18 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   const hubcmp=HUBS.map(([nm,st])=>{ let v=0,ok=true; pids.forEach(pid=>{const p=px(st,pid); if(p)v+=Math.max(1,sel[pid])*p.buy; else ok=false;});
     return `<tr><td style="padding:1px 10px 1px 0">${nm}</td><td class="mono" style="text-align:right;color:${st===buyHub?'var(--gold-bright)':'var(--cyan)'}">${ok?fmtIsk(v):(pricesLoading?'…':'—')}</td></tr>`; }).join('');
   const sec=(label,items,kind,cost,ok)=>{ if(!items.length) return '';
+    const VOL={0:0.01,1:0.38,2:1.5,3:6,4:100};
+    const vol=items.reduce((s,[t,q])=>s+q*(VOL[PI.tier[t]]!=null?VOL[PI.tier[t]]:0.01),0);
+    const volTxt=vol>=1000?vol.toLocaleString(undefined,{maximumFractionDigits:0}):vol.toLocaleString(undefined,{maximumFractionDigits:2});
     return `<div style="border:1px solid var(--line);margin-top:8px;padding:8px 10px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <b class="mono" style="color:var(--gold-bright)">${label} · ${items.length} items</b>
         <span class="mono" style="font-size:11px;color:var(--muted)" title="at ${hubName(buyHub)} sell price">${ok?'≈ '+fmtIsk(cost)+' ISK':(pricesLoading?'pricing…':'price n/a')}</span></div>
       <textarea id="mb_${kind}" readonly style="width:100%;height:80px;margin-top:6px;font-family:var(--mono,monospace);font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--line);resize:vertical">${multibuyText(items)}</textarea>
-      <button class="mbcopy" data-k="${kind}" style="margin-top:5px;cursor:pointer">Copy multibuy</button>
-      <span class="hint" id="mbok_${kind}" style="margin-left:8px"></span></div>`; };
+      <div style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap">
+        <button class="mbcopy" data-k="${kind}" style="cursor:pointer">Copy multibuy</button>
+        <span class="mono" style="font-size:11px;color:var(--cyan)" title="total packaged volume of this shopping list">Σ ${volTxt} m³</span>
+        <span class="hint" id="mbok_${kind}"></span></div></div>`; };
   box.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:6px">
       <span style="display:flex;align-items:center;gap:6px">Hub ${hubSel}</span>
