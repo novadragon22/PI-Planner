@@ -1000,6 +1000,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const items=targets.map(t=>({t, p:facPlanets.find(pp=>(pp.outs||[]).map(Number).includes(+t))})).filter(x=>x.p);
   const facTotOf=p=>Object.values(p.fcount||{}).reduce((s,n)=>s+n,0);
   const facCrew=[...new Set(items.map(x=>String(x.p.whoId)))]; const multiFac=facCrew.length>1;
+  const facAll=plan.planets.filter(p=>p.kind==='factory'); const facTotalCnt=facAll.reduce((s,p)=>s+facTotOf(p),0);
   const facRowFor=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts.size||exOuts.has(x));
     const depTxt=deps.map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
     return `<tr class="facrow" data-fac="${it.t}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)} <span class="hint">▸ layout</span></td></tr>`; };
@@ -1027,7 +1028,6 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>${p4banner}${p4out}${p4warn}`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  const facAll=plan.planets.filter(p=>p.kind==='factory'); const facTotalCnt=facAll.reduce((s,p)=>s+facTotOf(p),0);
   const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · click a ${consolidate?'planet':'product'} for its build layout</span></div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Produces</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   // ----- drill-down: full build layout for one final product -----
