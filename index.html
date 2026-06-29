@@ -280,8 +280,8 @@ function colonyPlan(target,sysId){
   const crew=ids.map(id=>({ id, name:(chars[id]&&chars[id].name)||('Char '+id), role:(charRole[id]||'extract'),
     cap: charSkills[id]?1+charSkills[id].ic:1+icOverride, bud: charSkills[id]?CCU_BUDGET[charSkills[id].ccu]:[cpuB0,pgB0],
     sk: charSkills[id]?(charSkills[id].ic||0)+(charSkills[id].ccu||0):0 }));
-  // prioritise the most PI-skilled pilots first (more planets, then more CPU budget); least-skilled fall to the end (and are dropped first by auto-fit)
-  crew.sort((a,b)=> b.cap-a.cap || b.bud[0]-a.bud[0] || b.sk-a.sk || String(a.name).localeCompare(String(b.name)));
+  // show crew in the order the characters were logged in
+  crew.sort((a,b)=> (((chars[a.id]&&chars[a.id].order)??1e9)-((chars[b.id]&&chars[b.id].order)??1e9)) || String(a.id).localeCompare(String(b.id)));
   const extractors=crew.filter(c=>c.role==='extract'), factories=crew.filter(c=>c.role==='factory'), fulls=crew.filter(c=>c.role==='full');
   // sequential picker: fill each character to their planet cap before moving on
   const mkPick=list=>{ let idx=0,cnt=0; return ()=>{ while(idx<list.length){ const c=list[idx]; if(cnt<c.cap){cnt++;return c;} idx++;cnt=0; } return {bud:[cpuB0,pgB0],name:null,id:null}; }; };
@@ -292,7 +292,7 @@ function colonyPlan(target,sysId){
   const poolOf=sid=>{ if(poolCache[sid]) return poolCache[sid]; const s=(typeof SYSPL!=='undefined')?SYSPL[sid]:'';
     const arr = s ? [...s].map((c,i)=>({ci:i+1,code:c})) : (()=>{ const a=[]; let i=1; const hv=SYS[sid]?SYS[sid][5]:{}; for(const c in hv){ for(let k=0;k<hv[c];k++) a.push({ci:i++,code:c}); } return a; })();
     return poolCache[sid]=arr; };
-  const ownerClaimedSys={}; let overflow=false, p4overflow=false;
+  const ownerClaimedSys={}; let overflow=false, p4overflow=false, extOver=0, facOver=0;
   const CAP = consolidate?24:10; // max facilities packed onto one planet before starting another
   const claimIn=(sid,ownerId,codes,avoid)=>{ const k=sid+'|'+ownerId; const u=ownerClaimedSys[k]||(ownerClaimedSys[k]=new Set());
     for(let pass=0;pass<2;pass++){ for(const pl of poolOf(sid)){ if(u.has(pl.ci)) continue; if(codes && codes.indexOf(pl.code)<0) continue;
@@ -358,7 +358,7 @@ function colonyPlan(target,sysId){
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
     const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=2);
     const packL=(rem,kind,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic, fname=kind==='adv'?'Advanced':'Basic', sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
-      while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
+      while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; else facOver++; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
         while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB&&pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
         const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
         res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
@@ -387,7 +387,7 @@ function colonyPlan(target,sysId){
       let placedAny=false;
       while(true){ const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
         const got=claim(cw.id,codes,(!roleMode && hasP4plan)?P4SET:null);
-        if(!got){ if(!placedAny) unassigned.push(p); else overflow=true; break; }
+        if(!got){ if(!placedAny) unassigned.push(p); else { overflow=true; extOver += (want!=null?Math.max(1,Math.ceil(want/6)):1); } break; }
         let heads=10; while(heads>1&&(FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu>cpuB||FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg>pgB))heads--; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
         const cap = (want==null)?6:Math.min(6,want); let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<cap){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
         const fb={}; if(p1) fb[p1]=basics;
@@ -428,14 +428,21 @@ function colonyPlan(target,sysId){
     if(hasExtractWork&&!extractors.length&&!fulls.length) roleNote+=' No character is set to Extractor.'; }
   if(p4outpostInfo&&p4outpostInfo.length) roleNote+=` ${SYS[sysId][0]} ran out of free Barren/Temperate planets for P4 — extra High-Tech plants build in the nearest system(s): ${p4outpostInfo.map(o=>SYS[o.id][0]+' ('+o.jumps+'j)').join(', ')} (haul P3 there).`;
   if(p4overflow) roleNote+=` P4 (High-Tech) production needs a free Barren or Temperate planet, but none is available here or nearby — free one up, move P4 to another character, or use a second system.`;
-  else if(overflow) roleNote+=` This colony needs more planets than ${SYS[sysId][0]} has (${POOL.length}); some factory planets reuse a planet — split production across more characters or a second system.`;
-  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length,feederInfo,overflow,p4overflow,p4outpostInfo};
+  else if(overflow){ const nExt=extractors.length+fulls.length, nFac=factories.length+fulls.length; const bits=[];
+    const trainOf=arr=>arr.reduce((s,c)=>{ const cs=charSkills[c.id]; return s+(cs&&cs.ic<5?(5-cs.ic):0); },0);
+    const roomNames=arr=>arr.filter(c=>{ const cs=charSkills[c.id]; return cs&&cs.ic<5; }).map(c=>c.name);
+    const trainTxt=(arr,short)=>{ const cap=trainOf(arr); if(cap<=0) return ''; const nm=roomNames(arr); return ` Or improving Interplanetary Consolidation toward V on ${nm.length} pilot${nm.length!==1?'s':''} that still ${nm.length!==1?'have':'has'} room (${nm.join(', ')}) adds +${cap} planet${cap!==1?'s':''} of capacity — covering up to ${Math.min(short,cap)} of these without another pilot.`; };
+    if(extOver>0){ const arr=extractors.concat(fulls); bits.push(`The <b>Extractor</b> role is short <b>${extOver}</b> planet${extOver>1?'s':''}${roleMode?` — your ${nExt} extractor pilot${nExt!==1?'s':''} can't host all the extraction/P1 here`:` — too many extraction planets for one character`}. Add ${roleMode&&nExt?'another':'an'} Extractor pilot or use a second system.${trainTxt(arr,extOver)}`); }
+    if(facOver>0){ const arr=factories.concat(fulls); bits.push(`The <b>Factory</b> role is short <b>${facOver}</b> planet${facOver>1?'s':''}${roleMode?` — your ${nFac} factory pilot${nFac!==1?'s':''} can't put every Advanced facility on its own planet`:` — too many factory planets for one character`}. Add ${roleMode&&nFac?'another':'a'} Factory pilot or use a second system.${trainTxt(arr,facOver)}`); }
+    roleNote += bits.length ? ' '+bits.join(' ') : ` This colony needs more planets than ${SYS[sysId][0]} has (${POOL.length}) — split production across more characters or a second system.`; }
+  return {ic:icOverride,ccu:ccuOverride,maxPlanets,cpuB:cpuB0,pgB:pgB0,planets,unassigned,total:planets.length,mode,note,roleMode,crew,roleNote,prodCount:planProds.length,feederInfo,overflow,p4overflow,p4outpostInfo,extOver,facOver};
 }
 
 // ---------- state ----------
 let tier=2, target=null, secFilter='all', whole=false, homeId=null, results=[], distCache={}, chosen=null, feederMark=null, logiFactory=null;
 let icOverride=5, ccuOverride=5, viewing='list';
 let chars=JSON.parse(localStorage.getItem('pi_chars')||'{}'); let colonies={}; let charLoc={}; let closestSys=null; let baseSuggest=[];
+(function(){ let n=0, changed=false; Object.keys(chars).forEach(k=>{ if(chars[k] && chars[k].order==null){ chars[k].order=n; changed=true; } n=Math.max(n+1,((chars[k]&&chars[k].order)||0)+1); }); if(changed) try{localStorage.setItem('pi_chars',JSON.stringify(chars));}catch(e){} })();
 let charSkills={}; // id -> {ic,ccu} per character (from ESI)
 let charRole=JSON.parse(localStorage.getItem('pi_roles')||'{}'); // id -> 'extract' | 'factory' | 'full'
 let charProduct=JSON.parse(localStorage.getItem('pi_charprod')||'{}'); // id -> product id (for 'full' role with multi-select)
@@ -1347,6 +1354,7 @@ async function sha256(s){return crypto.subtle.digest('SHA-256',new TextEncoder()
 function rnd(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return b64url(a.buffer);}
 function jwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return{};}}
 const saveChars=()=>localStorage.setItem('pi_chars',JSON.stringify(chars));
+function nextCharOrder(){ let m=-1; for(const k in chars){ if(chars[k]&&chars[k].order!=null) m=Math.max(m,chars[k].order); } return m+1; }
 async function login(){ if(!APP.clientId){ alert('Sign-in unavailable — no client ID is configured.'); return; }
   const v=rnd(32);sessionStorage.setItem('pi_pkce',v);const c=b64url(await sha256(v));
   const u=new URL('https://login.eveonline.com/v2/oauth/authorize');
@@ -1356,7 +1364,7 @@ async function tok(body){const r=await fetch('https://login.eveonline.com/v2/oau
 async function handleRedirect(){ const p=new URLSearchParams(location.search); const code=p.get('code'); if(!code)return;
   try{ const t=await tok({grant_type:'authorization_code',code,client_id:APP.clientId,code_verifier:sessionStorage.getItem('pi_pkce')||''});
     const pl=jwt(t.access_token); const id=+String(pl.sub||'').split(':').pop();
-    chars[id]={access:t.access_token,refresh:t.refresh_token,expires:Date.now()+(t.expires_in||1200)*1000,id,name:pl.name||('Char '+id)}; saveChars();
+    chars[id]={access:t.access_token,refresh:t.refresh_token,expires:Date.now()+(t.expires_in||1200)*1000,id,name:pl.name||('Char '+id),order:(chars[id]&&chars[id].order!=null)?chars[id].order:nextCharOrder()}; saveChars();
   }catch(e){ alert('Sign-in failed: '+e.message); } history.replaceState({},'',APP.redirect); }
 async function freshTok(id){const s=chars[id];if(Date.now()<s.expires-30000)return s.access;const t=await tok({grant_type:'refresh_token',refresh_token:s.refresh,client_id:APP.clientId});s.access=t.access_token;s.refresh=t.refresh_token||s.refresh;s.expires=Date.now()+(t.expires_in||1200)*1000;saveChars();return s.access;}
 async function eGet(id,path){const tk=await freshTok(id);const r=await fetch('https://esi.evetech.net/latest'+path,{headers:{Authorization:'Bearer '+tk}});if(!r.ok)throw new Error(path+' '+r.status);return r.json();}
@@ -1379,7 +1387,7 @@ function updateLocNow(){ const id=Object.keys(charLoc)[0]; const sys=id?charLoc[
   $('locNow').textContent = sys&&SYS[sys]? ('in '+SYS[sys][0]) : ''; }
 $('locBtn').onclick=()=>{ const sys=Object.values(charLoc).find(s=>SYS[s]); if(!sys){ alert('Log in with EVE first so I can read your current system.'); return; } $('home').value=SYS[sys][0]; compute(); };
 function logout(id){ delete chars[id]; delete colonies[id]; saveChars(); renderAuth(); drawMap(); }
-function renderAuth(){ const a=$('auth'); const ids=Object.keys(chars).map(Number);
+function renderAuth(){ const a=$('auth'); const ids=Object.keys(chars).map(Number).sort((x,y)=>(((chars[x]&&chars[x].order)??1e9)-((chars[y]&&chars[y].order)??1e9))||(x-y));
   if(!ids.length){ a.innerHTML='<button class="btn" id="loginBtn">EVE login</button>'; $('loginBtn').onclick=login; return; }
   const totalCol=Object.values(colonies).flat().length;
   a.innerHTML=`<div class="picker"><button class="btn" id="pk">▾ ${ids.length} pilot${ids.length>1?'s':''}${totalCol?` · ${totalCol} colonies`:''}</button>
