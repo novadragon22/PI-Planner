@@ -816,6 +816,91 @@ function setView(v){ if(v==='mine'){ viewing='mine'; renderMine(); }
   else { viewing= chosen?'colony':'list'; if(viewing==='colony') renderColony(); else renderResults(); }
   drawMap(); }
 // ---------- colony logistics: production → transfer routing ----------
+// ===== 3D colony pin + routing view (self-contained canvas, no external libs) =====
+let _l3dData=null, _l3dRAF=null, _l3dRot={yaw:0.6,pitch:-0.35}, _l3dZoom=1, _l3dDrag=null;
+function build3DGraph(planet, finals){
+  const outs=(planet.outs||[]).slice(); const nodes=[]; const links=[];
+  const PTC={cc:'var(--gold)',launch:'var(--cyan)',store:'var(--muted)',adv:'var(--cyan-bright)',htech:'var(--gold-bright)',ecu:'var(--amber)',basic:'var(--green)'};
+  const colMap={cc:'#c9a868',launch:'#7ab8c8',store:'#7a8fa0',adv:'#a0d0e0',htech:'#e8d296',ecu:'#d8a24a',basic:'#8cc86a'};
+  const add=(id,label,type,lat,lon)=>{ const la=lat*Math.PI/180, lo=lon*Math.PI/180;
+    const p=[Math.cos(la)*Math.sin(lo), Math.sin(la), Math.cos(la)*Math.cos(lo)];
+    const n={id,label,type,p,col:colMap[type]}; nodes.push(n); return n; };
+  const cc=add('cc','Command Center','cc',62,0);
+  const lp=add('lp','Launchpad','launch',28,-46);
+  const st=add('st','Storage','store',28,46);
+  const finalsSet=new Set(finals.map(Number)); const madeSet=new Set(outs.map(Number));
+  // facilities ringed by tier
+  const byTier={}; outs.forEach(o=>{ (byTier[PI.tier[o]]=byTier[PI.tier[o]]||[]).push(o); });
+  const facById={};
+  Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-8-ti*26;
+    arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-66+132*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
+      facById[o]=add('f'+o, PI.names[o], isHT?'htech':'adv', lat, lon); }); });
+  // links: power backbone + production routes
+  links.push({a:cc,b:lp,kind:'net'}); links.push({a:cc,b:st,kind:'net'}); links.push({a:lp,b:st,kind:'net'});
+  outs.forEach(o=>{ const f=facById[o]; const r=PI.recipe[o];
+    r.in.forEach(([I])=>{ if(madeSet.has(+I)) links.push({a:facById[I],b:f,kind:'route',col:'#a0d0e0'});
+      else links.push({a:lp,b:f,kind:'route',col:'#7ab8c8'}); });
+    links.push({a:f,b: finalsSet.has(+o)?lp:st, kind:'route', col: finalsSet.has(+o)?'#e8d296':'#8a7048'}); });
+  return {nodes,links,ptColor:(typeof PT_COLOR!=='undefined'&&PT_COLOR[planet.pcode])||'#4a6070'};
+}
+function rot3(p,yaw,pitch){ let x=p[0]*Math.cos(yaw)+p[2]*Math.sin(yaw), z=-p[0]*Math.sin(yaw)+p[2]*Math.cos(yaw), y=p[1];
+  return [x, y*Math.cos(pitch)-z*Math.sin(pitch), y*Math.sin(pitch)+z*Math.cos(pitch)]; }
+function draw3D(){ const cv=document.getElementById('l3dCanvas'); if(!cv||!_l3dData) return; const ctx=cv.getContext('2d');
+  const W=cv.width, H=cv.height, cx=W/2, cy=H/2; const R=Math.min(W,H)*0.34*_l3dZoom;
+  ctx.clearRect(0,0,W,H);
+  // planet sphere
+  const g=ctx.createRadialGradient(cx-R*0.3,cy-R*0.3,R*0.1,cx,cy,R);
+  g.addColorStop(0,_l3dData.ptColor); g.addColorStop(0.7,'#0a0d10'); g.addColorStop(1,'#05080b');
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.fillStyle=g; ctx.fill();
+  ctx.strokeStyle='rgba(122,143,160,0.25)'; ctx.lineWidth=1;
+  for(let k=-60;k<=60;k+=30){ ctx.beginPath(); for(let lon=-180;lon<=180;lon+=6){ const la=k*Math.PI/180,lo=lon*Math.PI/180; const rp=rot3([Math.cos(la)*Math.sin(lo),Math.sin(la),Math.cos(la)*Math.cos(lo)],_l3dRot.yaw,_l3dRot.pitch); if(rp[2]<-0.02)continue; const sx=cx+rp[0]*R,sy=cy-rp[1]*R; lon===-180?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy);} ctx.stroke(); }
+  const np=_l3dData.nodes.map(n=>{ const rp=rot3(n.p,_l3dRot.yaw,_l3dRot.pitch); return {n,rp,sx:cx+rp[0]*R,sy:cy-rp[1]*R,z:rp[2]}; });
+  const byId={}; np.forEach(o=>byId[o.n.id]=o);
+  // links (behind first)
+  _l3dData.links.slice().sort((a,b)=>((byId[a.a.id].z+byId[a.b.id].z)-(byId[b.a.id].z+byId[b.b.id].z))).forEach(l=>{
+    const A=byId[l.a.id],B=byId[l.b.id]; const front=(A.z+B.z)/2>0; ctx.globalAlpha=front?0.9:0.25;
+    ctx.strokeStyle=l.kind==='net'?'#2a4050':(l.col||'#8cc86a'); ctx.lineWidth=l.kind==='net'?1:2;
+    ctx.beginPath(); ctx.moveTo(A.sx,A.sy); ctx.lineTo(B.sx,B.sy); ctx.stroke();
+    if(l.kind==='route'){ const mx=(A.sx+B.sx)/2,my=(A.sy+B.sy)/2,an=Math.atan2(B.sy-A.sy,B.sx-A.sx);
+      ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(mx-7*Math.cos(an-0.4),my-7*Math.sin(an-0.4)); ctx.lineTo(mx-7*Math.cos(an+0.4),my-7*Math.sin(an+0.4)); ctx.closePath(); ctx.fillStyle=l.col||'#8cc86a'; ctx.fill(); }
+  });
+  ctx.globalAlpha=1;
+  // nodes depth-sorted
+  np.slice().sort((a,b)=>a.z-b.z).forEach(o=>{ const front=o.z>-0.05; ctx.globalAlpha=front?1:0.35; const rad=(o.n.type==='cc'?9:o.n.type==='htech'?8:7)*(0.7+0.3*(o.z+1)/2);
+    ctx.beginPath(); ctx.arc(o.sx,o.sy,rad,0,7); ctx.fillStyle=o.n.col; ctx.fill(); ctx.lineWidth=1.5; ctx.strokeStyle='#05080b'; ctx.stroke();
+    if(front){ ctx.fillStyle='#0a0d10'; ctx.font='bold 9px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(o.n.type==='cc'?'C':o.n.type==='launch'?'L':o.n.type==='store'?'S':o.n.type==='htech'?'H':o.n.type==='ecu'?'E':'F', o.sx,o.sy+0.5);
+      ctx.fillStyle='#c9d4db'; ctx.font='10px monospace'; ctx.textAlign='left'; ctx.fillText(o.n.label, o.sx+rad+3, o.sy+0.5); } });
+  ctx.globalAlpha=1;
+}
+function loop3D(){ draw3D(); _l3dRAF=requestAnimationFrame(loop3D); }
+function open3D(){ if(!_l3dData) return; let ov=document.getElementById('l3dOverlay');
+  if(!ov){ ov=document.createElement('div'); ov.id='l3dOverlay';
+    ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(3,5,7,0.96);display:flex;flex-direction:column';
+    ov.innerHTML=`<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)">
+        <b style="color:var(--gold-bright)">3D colony layout &amp; routing</b><span id="l3dTitle" class="hint"></span>
+        <span class="hint" style="margin-left:auto">drag to rotate · scroll to zoom</span>
+        <span id="l3dClose" style="cursor:pointer;padding:3px 10px;border:1px solid var(--line2);color:var(--cyan)">✕ close</span></div>
+      <canvas id="l3dCanvas" style="flex:1;width:100%;touch-action:none"></canvas>
+      <div class="hint" style="padding:8px 16px;border-top:1px solid var(--line);display:flex;gap:16px;flex-wrap:wrap">
+        <span style="color:#c9a868">● Command Center</span><span style="color:#7ab8c8">● Launchpad</span><span style="color:#7a8fa0">● Storage</span>
+        <span style="color:#a0d0e0">● Advanced facility</span><span style="color:#e8d296">● High-Tech plant</span>
+        <span style="color:#7ab8c8">→ P1 deposit</span><span style="color:#a0d0e0">→ intermediate</span><span style="color:#e8d296">→ final/export</span></div>`;
+    document.body.appendChild(ov);
+    document.getElementById('l3dClose').onclick=close3D;
+    const cv=document.getElementById('l3dCanvas');
+    const fit=()=>{ const r=cv.getBoundingClientRect(); cv.width=r.width; cv.height=r.height; }; setTimeout(fit,0); window.addEventListener('resize',fit);
+    cv.addEventListener('pointerdown',e=>{ _l3dDrag={x:e.clientX,y:e.clientY}; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener('pointermove',e=>{ if(!_l3dDrag)return; _l3dRot.yaw+=(e.clientX-_l3dDrag.x)*0.008; _l3dRot.pitch=Math.max(-1.4,Math.min(1.4,_l3dRot.pitch+(e.clientY-_l3dDrag.y)*0.008)); _l3dDrag={x:e.clientX,y:e.clientY}; });
+    cv.addEventListener('pointerup',()=>_l3dDrag=null); cv.addEventListener('pointercancel',()=>_l3dDrag=null);
+    cv.addEventListener('wheel',e=>{ e.preventDefault(); _l3dZoom=Math.max(0.5,Math.min(3,_l3dZoom*(e.deltaY<0?1.1:0.9))); },{passive:false});
+  }
+  ov.style.display='flex';
+  const t=document.getElementById('l3dTitle'); if(t) t.textContent=`${SYS[_l3dData.planet.sys]?SYS[_l3dData.planet.sys][0]:''} · ${(typeof PNAME2!=='undefined'&&PNAME2[_l3dData.planet.pcode])||_l3dData.planet.pcode} · ${_l3dData.finals.map(f=>PI.recipe[f]?PI.recipe[f].name:f).join(', ')}`;
+  const cv=document.getElementById('l3dCanvas'); const r=cv.getBoundingClientRect(); cv.width=r.width||800; cv.height=r.height||500;
+  if(_l3dRAF) cancelAnimationFrame(_l3dRAF); loop3D();
+}
+function close3D(){ if(_l3dRAF){ cancelAnimationFrame(_l3dRAF); _l3dRAF=null; } const ov=document.getElementById('l3dOverlay'); if(ov) ov.style.display='none'; }
 function buildLogistics(plan){
   const idx=new Map(); plan.planets.forEach((p,i)=>idx.set(p,i+1));
   const flows=[]; plan.planets.forEach(p=>{ (p.outs||[]).forEach(t=>{
@@ -893,17 +978,32 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     const dep=new Set(); finals.forEach(F=>p1Leaves(F).forEach(x=>dep.add(x)));
     const titleTxt = finals.length>1 ? `${finPl?des(finPl).replace(/<[^>]+>/g,'').trim()+' · ':''}${finals.map(nm).join(' + ')}` : nm(T);
     let h=`<div style="padding:8px 14px;display:flex;align-items:center;gap:10px"><span id="logiBack" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--cyan)">‹ back to route</span>
-      <b style="color:var(--gold-bright)">Factory layout · ${titleTxt}</b>${finPl&&finPl.who?`<span class="hint">${finPl.who}${whoRole[finPl.whoId]?' ('+whoRole[finPl.whoId]+')':''}</span>`:''}${finals.length>1?'<span class="hint">· consolidated on one planet</span>':''}</div>
+      <b style="color:var(--gold-bright)">Factory layout · ${titleTxt}</b>${finPl&&finPl.who?`<span class="hint">${finPl.who}${whoRole[finPl.whoId]?' ('+whoRole[finPl.whoId]+')':''}</span>`:''}${finals.length>1?'<span class="hint">· consolidated on one planet</span>':''}
+      <span id="l3dBtn" class="navbtn" style="margin-left:auto;cursor:pointer;padding:3px 10px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⊹ 3D layout &amp; routing</span></div>
       <div style="margin:2px 14px 6px;padding:8px 10px;border:1px solid var(--line2);background:rgba(122,184,200,.05)"><div class="mono" style="font-size:10px;color:var(--gold);letter-spacing:.1em">INITIAL DEPOSIT · from extractors</div><div style="margin-top:3px;color:var(--cyan-bright)">${[...dep].map(nm).join('  ·  ')||'—'}</div></div>`;
     Object.keys(byTier).map(Number).sort((a,b)=>a-b).forEach(tr=>{
       h+=`<div class="mono" style="font-size:10px;color:var(--gold-dim);letter-spacing:.1em;padding:7px 14px 2px">TIER P${tr}</div>`;
-      byTier[tr].forEach(prod=>{ const pl=planetFor(prod); const ins=PI.recipe[prod].in.map(([y])=>nm(y)).join('  +  '); const fin=finalsSet.has(+prod);
+      byTier[tr].forEach(prod=>{ const pl=planetFor(prod); const r=PI.recipe[prod]; const cyc=r.ct%3600===0?(r.ct/3600)+'h':Math.round(r.ct/60)+'m';
+        const ins=r.in.map(([y,q])=>`${q} ${nm(y)}`).join('  +  '); const fin=finalsSet.has(+prod);
         const isHT=PI.tier[prod]>=4; const ptype=pl?(PNAME2[pl.pcode]||pl.pcode):'';
         const fclabel=isHT?'High-Tech Production Plant':'Advanced Industry Facility';
         const loc = pl? `${des(pl)} · ${ptype}${pl.who?' · '+pl.who:''}` : 'unplaced';
         h+=`<div style="margin:3px 14px;padding:6px 10px;border:1px solid ${fin?'var(--gold-dim)':isHT?'var(--line2)':'var(--line)'};${fin?'background:rgba(201,168,104,.08)':''}">
           <div><b style="color:${fin?'var(--gold-bright)':'var(--cyan-bright)'}">${nm(prod)}</b>${fin?' <span class="hint">· FINAL PRODUCT</span>':''} <span class="hint">@ ${loc}</span></div>
-          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> ${nm(prod)} · ${fclabel}${isHT?' <span style="color:var(--gold)">(Barren/Temperate only)</span>':''}${fin?' · storage 1× Launchpad + 1× Storage Facility <span style="color:var(--gold)">(export point)</span>':''}</div></div>`; }); });
+          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> <b>${r.out}</b> ${nm(prod)} <span style="color:var(--muted2)">/ ${cyc} cycle</span> · ${fclabel}${isHT?' <span style="color:var(--gold)">(Barren/Temperate only)</span>':''}${fin?' · <span style="color:var(--gold)">export point</span>':''}</div></div>`; }); });
+    // production ratios — facilities (and P0 extraction) to keep the line balanced by cycle time
+    const facRatios=F=>{ const need={F:1}, p0={};
+      chainTiers(F).slice().sort((a,b)=>PI.tier[b]-PI.tier[a]).forEach(X=>{ const r=PI.recipe[X]; if(!r||!need[X]) return; const cphX=3600/r.ct;
+        r.in.forEach(([I,q])=>{ const ri=PI.recipe[I]; if(ri){ const rateI=ri.out*(3600/ri.ct); need[I]=(need[I]||0)+need[X]*q*cphX/rateI; } else { p0[I]=(p0[I]||0)+need[X]*q*cphX; } }); });
+      return {need,p0}; };
+    const rfmt=n=>{ const r=Math.round(n*10)/10; return (r%1===0)?String(r):r.toFixed(1); };
+    h+=`<div class="mono" style="font-size:10px;color:var(--gold);letter-spacing:.1em;padding:9px 14px 2px">PRODUCTION RATIOS · facilities to keep the line balanced</div>
+      <div style="margin:3px 14px 8px;padding:7px 10px;border:1px solid var(--line2);background:rgba(122,184,200,.04)" class="hint">`;
+    finals.forEach(F=>{ const {need,p0}=facRatios(F); const byT={}; Object.keys(need).forEach(x=>{ const t=PI.tier[x]; (byT[t]=byT[t]||[]).push([x,need[x]]); });
+      const parts=[]; [4,3,2,1].forEach(t=>{ if(byT[t]) parts.push(`<span style="color:var(--muted2)">P${t}</span> `+byT[t].sort((a,b)=>b[1]-a[1]).map(([x,n])=>`<b>${rfmt(n)}×</b> ${nm(x)}`).join(', ')); });
+      const p0txt=Object.keys(p0).length?` · <span style="color:var(--muted2)">P0</span> `+Object.entries(p0).map(([x,v])=>`${Math.round(v).toLocaleString()}/h ${nm(x)}`).join(', '):'';
+      h+=`<div style="margin-top:3px"><b style="color:var(--cyan-bright)">${nm(F)}</b> (1× ${PI.tier[F]>=4?'High-Tech plant':'Advanced facility'}): ${parts.join(' · ')}${p0txt}</div>`; });
+    h+=`<div style="margin-top:3px;color:var(--muted2)">Counts are facilities relative to one final-tier facility, balanced by cycle time so nothing starves or backs up (P0 shown as units/hour to extract). The plan packs facilities to fit CPU/PG, so scale these to your planet count.</div></div>`;
     // storage planning — keep inputs available and final product(s) buffered for return
     const VOL={0:0.01,1:0.38,2:1.5,3:6,4:100}; const LP=10000, SF=12000; const cf=v=>Math.floor(v).toLocaleString();
     h+=`<div class="mono" style="font-size:10px;color:var(--gold);letter-spacing:.1em;padding:9px 14px 2px">STORAGE · maximise input availability &amp; product return</div>
@@ -915,6 +1015,10 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   if(logiFactory!=null && items.some(it=>+it.t===+logiFactory)){
     $('resBody').innerHTML=`<tr><td style="padding:0">${layoutHtml(+logiFactory)}</td></tr>`;
     if($('logiBack')) $('logiBack').onclick=()=>{ logiFactory=null; renderLogistics(); };
+    { const T=+logiFactory; const pf=plan.planets.find(p=>(p.outs||[]).map(Number).includes(T));
+      const fin=(consolidate&&pf)?targets.filter(t=>(pf.outs||[]).map(Number).includes(+t)):[T];
+      _l3dData = pf?build3DGraph(pf,fin):null; _l3dData&&(_l3dData.planet=pf, _l3dData.finals=fin);
+      if($('l3dBtn')) $('l3dBtn').onclick=()=>open3D(); }
     return;
   }
   logiFactory=null;
