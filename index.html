@@ -877,15 +877,15 @@ function build3DGraph(planet, finals){
   const add=(id,label,type,lat,lon)=>{ const la=lat*Math.PI/180, lo=lon*Math.PI/180;
     const p=[Math.cos(la)*Math.sin(lo), Math.sin(la), Math.cos(la)*Math.cos(lo)];
     const n={id,label,type,p,col:colMap[type]}; nodes.push(n); return n; };
-  const cc=add('cc','Command Center','cc',56,0);
-  const lp=add('lp','Launchpad','launch',24,-38);
-  const st=add('st','Storage','store',24,38);
+  const cc=add('cc','Command Center','cc',44,0);
+  const lp=add('lp','Launchpad','launch',18,-26);
+  const st=add('st','Storage','store',18,26);
   const finalsSet=new Set(finals.map(Number)); const madeSet=new Set(outs.map(Number));
   // facilities ringed by tier
   const byTier={}; outs.forEach(o=>{ (byTier[PI.tier[o]]=byTier[PI.tier[o]]||[]).push(o); });
   const facById={};
-  Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-6-ti*19;
-    arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-52+104*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
+  Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-4-ti*13;
+    arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-38+76*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
       facById[o]=add('f'+o, PI.names[o], isHT?'htech':'adv', lat, lon); }); });
   // links: power backbone + production routes
   links.push({a:cc,b:lp,kind:'net'}); links.push({a:cc,b:st,kind:'net'}); links.push({a:lp,b:st,kind:'net'});
@@ -918,11 +918,11 @@ function draw3D(){ const cv=document.getElementById('l3dCanvas'); if(!cv||!_l3dD
   });
   ctx.globalAlpha=1;
   // nodes depth-sorted (marker size fixed so the cluster stays compact while zooming)
-  np.slice().sort((a,b)=>a.z-b.z).forEach(o=>{ const front=o.z>-0.05; ctx.globalAlpha=front?1:0.32; const rad=(o.n.type==='cc'?7:o.n.type==='htech'?6.5:6)*(0.75+0.25*(o.z+1)/2);
+  np.slice().sort((a,b)=>a.z-b.z).forEach(o=>{ const front=o.z>-0.05; ctx.globalAlpha=front?1:0.32; const rad=(o.n.type==='cc'?21:o.n.type==='htech'?19.5:18)*(0.75+0.25*(o.z+1)/2);
     ctx.beginPath(); ctx.arc(o.sx,o.sy,rad,0,7); ctx.fillStyle=o.n.col; ctx.fill(); ctx.lineWidth=1.2; ctx.strokeStyle='#05080b'; ctx.stroke();
-    if(front){ ctx.fillStyle='#0a0d10'; ctx.font='bold 8px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    if(front){ ctx.fillStyle='#0a0d10'; ctx.font='bold 18px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.fillText(o.n.type==='cc'?'C':o.n.type==='launch'?'L':o.n.type==='store'?'S':o.n.type==='htech'?'H':o.n.type==='ecu'?'E':'F', o.sx,o.sy+0.5);
-      ctx.fillStyle='#c9d4db'; ctx.font='9px monospace'; ctx.textAlign='left'; ctx.fillText(o.n.label, o.sx+rad+3, o.sy+0.5); } });
+      ctx.fillStyle='#c9d4db'; ctx.font='bold 27px monospace'; ctx.textAlign='left'; ctx.fillText(o.n.label, o.sx+rad+5, o.sy+0.5); } });
   ctx.globalAlpha=1;
 }
 function loop3D(){ draw3D(); _l3dRAF=requestAnimationFrame(loop3D); }
