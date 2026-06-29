@@ -796,7 +796,10 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       if(cs&&!nr){ if(cs.ic<5) tips.push(`Interplanetary Consolidation ${ROMAN[cs.ic]}→V = up to +${5-cs.ic} planet${5-cs.ic>1?'s':''}`);
         if(cs.ccu<5){ const g=CCU_BUDGET[5][0]-CCU_BUDGET[cs.ccu][0]; tips.push(`Command Center Upgrades ${ROMAN[cs.ccu]}→V = +${g.toLocaleString()} CPU`); }
         if(tips.length) short = cs.ic<5?`⬆ +${5-cs.ic} planet${5-cs.ic>1?'s':''}`:'⬆ +CPU'; }
-      const upBadge = short?`<span class="skup" title="${tips.join(' · ')} — training this raises this character's own capacity and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
+      const maxed = cs && !nr && cs.ic>=5 && cs.ccu>=5;
+      const upBadge = maxed
+        ? `<span title="Interplanetary Consolidation V and Command Center Upgrades V — PI skills maxed" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--green);border:1px solid var(--green);padding:2px 6px;white-space:nowrap">✓ maxed</span>`
+        : short?`<span class="skup" title="${tips.join(' · ')} — training this raises this character's own capacity and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
       return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;flex-wrap:wrap;${nr?'opacity:.5':''}">
       <span style="font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${nr?'not required':c.cap+' planets · CPU '+c.bud[0]}</span></span>
       ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${rb(c,'notreq','Not required')}${nr?'':drop}${nr?'':upBadge}
