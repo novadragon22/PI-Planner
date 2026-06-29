@@ -261,6 +261,11 @@ function chainTiers(target){ // returns ordered list of schematic outputs in the
   const seen=new Set(), list=[]; (function rec(t){ const r=PI.recipe[t]; if(!r)return; r.in.forEach(([x])=>rec(String(x)));
     if(!seen.has(t)){ seen.add(t); list.push(+t); } })(String(target));
   return list.sort((a,b)=>PI.tier[a]-PI.tier[b]); }
+// balanced facility demand: facilities of each schematic needed to keep one final-tier facility fed (per cycle-time throughput), summed over the given finals
+function facBalance(finals){ const need={}; (finals||[]).forEach(F=>{ const loc={}; loc[F]=1;
+    chainTiers(F).slice().sort((a,b)=>PI.tier[b]-PI.tier[a]).forEach(X=>{ const r=PI.recipe[X]; if(!r||!loc[X])return; const cph=3600/r.ct;
+      r.in.forEach(([I,q])=>{ const ri=PI.recipe[I]; if(ri){ const rate=ri.out*3600/ri.ct; loc[I]=(loc[I]||0)+loc[X]*q*cph/rate; } }); });
+    Object.keys(loc).forEach(k=>need[k]=(need[k]||0)+loc[k]); }); return need; }
 function colonyPlan(target,sysId){
   const have=SYS[sysId][5];
   // products this colony builds: the focus target, or the whole basket when 'all products' is toggled
@@ -301,9 +306,11 @@ function colonyPlan(target,sysId){
   const hasP4plan=planProds.some(t=>PI.tier[t]>=4);
   // B/T is only worth reserving for P4 when the SAME pilot does both extraction and P4 (single-char shared mode, or a full-role pilot).
   // Different pilots have independent colony allotments and can share a planet, so their extraction never blocks another pilot's P4.
-  const facLine=made=>{ const advm=made.filter(o=>PI.tier[o]<4), htm=made.filter(o=>PI.tier[o]>=4); const parts=[];
-    if(advm.length) parts.push(`${advm.length}× Advanced Industry Facility → ${advm.map(o=>PI.recipe[o].name).join(', ')}`);
-    if(htm.length) parts.push(`${htm.length}× High-Tech Production Plant → ${htm.map(o=>PI.recipe[o].name).join(', ')}`);
+  const facLine=made=>{ const cnt={}; made.forEach(o=>cnt[o]=(cnt[o]||0)+1);
+    const advm=Object.keys(cnt).filter(o=>PI.tier[o]<4), htm=Object.keys(cnt).filter(o=>PI.tier[o]>=4); const parts=[];
+    const lab=o=>`${cnt[o]>1?cnt[o]+'× ':''}${PI.recipe[o].name}`;
+    if(advm.length) parts.push(`${advm.reduce((s,o)=>s+cnt[o],0)}× Advanced Industry Facility → ${advm.map(lab).join(', ')}`);
+    if(htm.length) parts.push(`${htm.reduce((s,o)=>s+cnt[o],0)}× High-Tech Production Plant → ${htm.map(lab).join(', ')}`);
     return parts.join('<br>'); };
   const packFac=(rem,kind,getCrew,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic; const fname=kind==='adv'?'Advanced':'Basic';
     const sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
@@ -312,7 +319,7 @@ function colonyPlan(target,sysId){
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id, sys:sysId, kind:kind==='adv'?'factory':'basic', pcode:code, ci:pick?pick.ci:null,
-        outs:made.slice(), ins:kind==='adv'?advIns(made):[],
+        outs:[...new Set(made)], ins:kind==='adv'?advIns(made):[],
         fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
@@ -331,17 +338,21 @@ function colonyPlan(target,sysId){
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=PI.tier[o]>=4?FAC.htech:FAC.adv; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       planets.push({title:`${PNAME2[pick.code]} (factory)${outpost?' · '+SYS[psys][0]+' (P4 outpost)':''}`, sub: outpost?`P4 outpost — ${SYS[psys][0]} · ${jumps} jump${jumps!==1?'s':''} from main`:'P1 → P2 → P3 → P4 in-place', who:cw.name, whoId:cw.id, sys:psys, kind:'factory', pcode:pick.code, ci:pick.ci, p4outpost:outpost,
-        outs:made.slice(), ins:advIns(made), fac:`${facLine(made)}<br>1× Launchpad · 1× Storage Facility`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        outs:[...new Set(made)], ins:advIns(made), fac:`${facLine(made)}<br>1× Launchpad · 1× Storage Facility`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
   // pack advanced facilities. A P4 target runs its WHOLE chain (P2→P3→P4) on one Barren/Temperate line
   // (Advanced Industry Facilities for the intermediates + the High-Tech plant), fed by P1. Non-P4 targets go on any non-B/T planet.
   const packAdv=(getCrew)=>{ const p4t=planProds.map(Number).filter(t=>PI.tier[t]>=4); const claimed=new Set();
+    // when consolidating, replicate each step's facilities in the throughput-balanced ratio so higher tiers aren't starved
+    const expand=(prods,finals)=>{ if(!consolidate) return prods.slice(); const need=facBalance(finals); const out=[];
+      prods.slice().sort((a,b)=>PI.tier[b]-PI.tier[a]).forEach(o=>{ const c=Math.max(1,Math.round(need[o]||1)); for(let i=0;i<c;i++) out.push(o); }); return out; };
     if(consolidate){ const p4all=[]; p4t.forEach(t=>chainTiers(t).filter(o=>PI.tier[o]>=2&&!claimed.has(o)).forEach(o=>{ claimed.add(o); p4all.push(o); }));
-      p4all.sort((a,b)=>PI.tier[a]-PI.tier[b]); if(p4all.length) packP4(p4all.slice(),getCrew);
+      if(p4all.length) packP4(expand(p4all,p4t),getCrew);
     } else { p4t.forEach(t=>{ const chain=chainTiers(t).filter(o=>PI.tier[o]>=2 && !claimed.has(o)); chain.forEach(o=>claimed.add(o));
       if(chain.length) packP4(chain.slice(),getCrew); }); }
     const rest=advOuts.filter(o=>!claimed.has(o));
-    if(rest.length) packFac(rest.slice(),'adv',getCrew,null,P4SET); };
+    if(rest.length){ const restFinals=planProds.map(Number).filter(t=>PI.tier[t]>=2 && PI.tier[t]<4);
+      packFac(expand(rest, restFinals.length?restFinals:rest),'adv',getCrew,null,P4SET); } };
   // build a COMPLETE chain (extraction + factory) for one product on one owner's own planets/budget
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
     const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=2);
@@ -660,6 +671,13 @@ function compute(){ const p0=basketP0(); if(!p0.length){ results=[]; closestSys=
   const homeRegion = homeId&&SYS[homeId] ? SYS[homeId][2] : null;
   let pool=cand, regionScoped=false;
   if(homeRegion!=null){ const inR=cand.filter(c=>SYS[c.id][2]===homeRegion); if(inR.length){ pool=inR; regionScoped=true; } }
+  // balanced factory requirement (ratio-aware, system-independent counts) so suggestions prefer systems that can host the P4 line in-place
+  let btNeed=0;
+  if(target && PI.recipe[target]){ const rep=(homeId&&SYS[homeId])?homeId:(pool[0]&&pool[0].id);
+    if(rep){ try{ const rq=colonyPlan(target,rep); btNeed=rq.planets.filter(p=>p.kind==='factory'&&(p.pcode==='B'||p.pcode==='T')).length; }catch(e){} } }
+  const btOf=c=>(c.have.B||0)+(c.have.T||0);
+  // rank: coverage, then whether the system has enough Barren/Temperate for the balanced P4 line, then proximity, then sec
+  if(btNeed) pool=pool.slice().sort((a,b)=> b.covered-a.covered || ((btOf(b)>=btNeed?1:0)-(btOf(a)>=btNeed?1:0)) || (a.jumps??1e9)-(b.jumps??1e9) || b.sec-a.sec );
   const sugRegion = regionScoped ? homeRegion : null;
   const sugOrigin = homeId || (pool[0]&&pool[0].id);
   baseSuggest=[];
@@ -680,27 +698,53 @@ function renderResults(){
   const cl=$('closest');
   cl.innerHTML = (baseSuggest.length&&basket.length) ? `▸ ${baseSuggest.length} suggested base${baseSuggest.length>1?'s':''} below` : '';
   const jtxt=j=>j==null?'—':j+'j';
+  // reflect the balanced (ratio-aware) build into candidates: compute the requirement on a representative system
+  let reqSummary='', btNeed=0, hasP4req=false, modeReq='', facTot=0, basicReq=0;
+  if(basket.length && target && PI.recipe[target]){
+    const repSys=(chosen&&SYS[chosen])?chosen:((baseSuggest[0]&&baseSuggest[0].id)||(results[0]&&results[0].id));
+    if(repSys){ try{ const rq=colonyPlan(target,repSys);
+      const fac=rq.planets.filter(p=>p.kind==='factory'), extr=rq.planets.filter(p=>p.kind==='extract'), basic=rq.planets.filter(p=>p.kind==='basic');
+      hasP4req=rq.planets.some(p=>(p.outs||[]).some(o=>PI.tier[o]>=4));
+      btNeed=fac.filter(p=>p.pcode==='B'||p.pcode==='T').length; modeReq=rq.mode; facTot=fac.length; basicReq=basic.length;
+      const parts=[]; if(extr.length)parts.push(`${extr.length} extraction`); if(basic.length)parts.push(`${basic.length} basic`); if(fac.length)parts.push(`${fac.length} factory`);
+      reqSummary=`Balanced build ≈ <b>${rq.planets.length}</b> planet${rq.planets.length!==1?'s':''}${parts.length?` (${parts.join(' + ')})`:''}${hasP4req?` · the P4 line needs <b>${btNeed}</b> Barren/Temperate`:''}${consolidate?' · consolidated':''}. Facility counts use the throughput-balanced ratio.`;
+    }catch(e){} }
+  }
+  // per-system balanced planet count: this system's extraction coverage + the (system-independent) balanced factory/basic planets
+  const buildTag=covered=>{ if(!facTot && !basicReq) return ''; const ext=modeReq==='extract'?covered:0, bas=modeReq==='buyP0'?basicReq:0, total=ext+bas+facTot;
+    const detail=[ext?ext+' extraction':'',bas?bas+' basic':'',facTot?facTot+' factory':''].filter(Boolean).join(' + ');
+    return ` <span class="mono" title="Balanced build in this system: ${detail} planets (factory counts use the throughput ratio)" style="color:var(--cyan)">⊞${total}</span>`; };
+  const btTag=have=>{ if(!hasP4req) return ''; const a=(have.B||0)+(have.T||0); return ` <span class="mono" title="Barren/Temperate planets in-system — the balanced P4 line needs ${btNeed} (shortfall spills to adjacent-system outposts)" style="color:${a>=btNeed?'var(--green)':a>0?'var(--amber)':'var(--red)'}">⬡${a}/${btNeed}</span>`; };
+  // proper per-system balanced plan for the suggested bases (only 3 — full colonyPlan, ratio-balanced)
+  const sbal=id=>{ if(!(target&&PI.recipe[target])) return null; try{ const pl=colonyPlan(target,id);
+    const fac=pl.planets.filter(p=>p.kind==='factory'), btFac=fac.filter(p=>p.pcode==='B'||p.pcode==='T');
+    return { total:pl.planets.length, extr:pl.planets.filter(p=>p.kind==='extract').length, basic:pl.planets.filter(p=>p.kind==='basic').length,
+      fac:fac.length, bt:btFac.length, btIn:btFac.filter(p=>p.sys===id).length, btOut:btFac.filter(p=>p.sys!==id).length,
+      outposts:(pl.p4outpostInfo||[]).length, overflow:!!pl.p4overflow, hasP4:pl.planets.some(p=>(p.outs||[]).some(o=>PI.tier[o]>=4)) }; }catch(e){ return null; } };
   const sugBlock = (baseSuggest.length&&basket.length) ? `<tr><td colspan="6" style="padding:0">
     <div style="margin:8px 14px;border:1px solid var(--line2);background:rgba(122,184,200,.04)">
       <div class="mono" style="font-size:10px;letter-spacing:.12em;color:var(--gold);padding:7px 10px 3px">SUGGESTED MAIN SYSTEMS · ${homeId&&SYS[homeId]?`${SYS[homeId][0]} region (${REG[SYS[homeId][2]]||'?'})`:'set home/staging for region focus'}</div>
-      ${baseSuggest.map((b,i)=>{ const s=SYS[b.id]; const full=b.covered===b.total;
+      ${baseSuggest.map((b,i)=>{ const s=SYS[b.id]; const full=b.covered===b.total; const bal=sbal(b.id);
         const miss = full?`<span style="color:var(--green)">covers all ${b.total} types in-system</span>`
           : `<span style="color:var(--muted2)">missing</span> ${b.dists.map(d=>`<span class="mono" style="color:${PT_COLOR[d.code]}">${d.code}</span>${d.sysId!=null?`<span class="csys mono" data-id="${d.sysId}" style="cursor:pointer;color:var(--cyan)" title="${SYS[d.sysId][0]} — nearest in-region source"> →${SYS[d.sysId][0]} ${d.jumps}j</span>`:`<span class="mono" style="color:var(--red)"> →not in region</span>`}`).join(' · ')}`;
+        const balBadges = bal? `<span class="mono" style="color:var(--cyan)" title="balanced build — total planets">⊞${bal.total}</span>${bal.hasP4?` <span class="mono" title="P4 line on ${bal.bt} Barren/Temperate: ${bal.btIn} in-system${bal.btOut?', '+bal.btOut+' on outposts':''}" style="color:${bal.overflow?'var(--red)':bal.btOut?'var(--amber)':'var(--green)'}">⬡${bal.btIn}${bal.btOut?'+'+bal.btOut+'↗':''}/${bal.bt}</span>`:''}`:'';
+        const balLine = bal? `<div style="width:100%;padding:2px 0 0;color:var(--muted2);font-size:10.5px" class="mono">balanced: ${[bal.extr?bal.extr+' extraction':'',bal.basic?bal.basic+' basic':'',bal.fac?bal.fac+' factory (throughput-ratio)':''].filter(Boolean).join(' + ')} = <b style="color:var(--cyan)">${bal.total}</b> planets${bal.hasP4?` · P4 on ${bal.bt} B/T → <span style="color:${bal.overflow?'var(--red)':bal.btOut?'var(--amber)':'var(--green)'}">${bal.overflow?'no B/T available':bal.btOut?`${bal.btIn} here + ${bal.btOut} on ${bal.outposts} outpost system${bal.outposts!==1?'s':''}`:'fits in-system'}</span>`:''}</div>`:'';
         return `<div style="display:flex;gap:8px;align-items:baseline;padding:4px 10px;border-top:1px solid var(--line);flex-wrap:wrap">
           <span class="csys" data-id="${b.id}" style="cursor:pointer;color:${i===0?'var(--cyan-bright)':'var(--cyan)'};min-width:150px"><b>${i+1}. ${safeKind(b.id)==='sov'?'<span style="color:var(--green)" title="your sovereignty — safe">⛊</span> ':''}${s[0]}</b> <span class="hint">${REG[s[2]]||''}</span></span>
-          <span class="mono" style="color:${b.covered===b.total?'var(--green)':'var(--gold-bright)'}">${b.covered}/${b.total}</span>
+          <span class="mono" style="color:${b.covered===b.total?'var(--green)':'var(--gold-bright)'}">${b.covered}/${b.total}</span>${balBadges}
           <span class="mono hint">${b.jumps==null?'—':b.jumps+'j'} from home</span>
-          <span style="flex:1;font-size:11px;min-width:200px">${miss}</span></div>`; }).join('')}
+          <span style="flex:1;font-size:11px;min-width:200px">${miss}</span>${balLine}</div>`; }).join('')}
       <div class="hint" style="padding:3px 10px 7px;color:var(--muted2)">${window._sugRegionScoped?'Kept within your home region':'Set a home/staging system to focus suggestions on one region'} — missing planet types are sourced from the nearest same-region systems (need not be one system). Click any system to plan it.</div>
     </div></td></tr>` : '';
-  $('resHead').innerHTML = `<tr><th>System</th><th>Region</th><th class="r">Sec</th><th>Planets (needed types)</th><th class="r">Coverage</th>${homeId?'<th class="r">Jumps</th>':''}</tr>`;
+  $('resHead').innerHTML = `<tr><th>System</th><th>Region</th><th class="r">Sec</th><th>Planet types · ⊞ balanced planets${hasP4req?' · ⬡ B/T':''}</th><th class="r">Coverage</th>${homeId?'<th class="r">Jumps</th>':''}</tr>`;
   if(!basket.length){ $('resBody').innerHTML=`<tr><td colspan="6"><div class="hint" style="padding:8px 0">Select one or more target products to locate systems.</div></td></tr>`; return; }
   const neededCodes=new Set(); basket.forEach(p=>(PI.p0pt[p]||[]).forEach(c=>neededCodes.add(c)));
-  $('resBody').innerHTML = sugBlock + results.map(r=>{ const s=SYS[r.id]; const sk=safeKind(r.id);
+  const reqRow = reqSummary ? `<tr><td colspan="6" style="padding:0"><div class="hint" style="margin:8px 14px 0;padding:7px 10px;border:1px solid var(--line2);background:rgba(201,168,104,.05);font-size:11px">${reqSummary}</div></td></tr>` : '';
+  $('resBody').innerHTML = reqRow + sugBlock + results.map(r=>{ const s=SYS[r.id]; const sk=safeKind(r.id);
     const safeMk = sk==='sov'?`<span style="color:var(--green)" title="your alliance sovereignty — safe">⛊</span> `:'';
     const pts=Object.keys(s[5]).filter(c=>neededCodes.has(c)).sort().map(c=>`<span class="mono" style="color:${PT_COLOR[c]}">${c}${s[5][c]}</span>`).join(' ');
     return `<tr class="row" data-id="${r.id}"><td>${safeMk}${s[0]}</td><td class="mono" style="color:var(--muted)">${REG[s[2]]||''}</td>
-      <td class="r mono ${secClass(r.sec)}">${r.sec.toFixed(1)}</td><td>${pts}</td>
+      <td class="r mono ${secClass(r.sec)}">${r.sec.toFixed(1)}</td><td>${pts}${buildTag(r.covered)}${btTag(s[5])}</td>
       <td class="r mono ${r.covered===r.total?'full':'part'}">${r.covered}/${r.total}</td>${homeId?`<td class="r mono cy">${r.jumps===Infinity?'—':r.jumps}</td>`:''}</tr>`; }).join('')
     || (sugBlock?'':`<tr><td colspan="6"><div class="hint" style="padding:8px 0">No systems match — loosen the security filter or turn off “whole chain in one system”.</div></td></tr>`);
   $('resBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>selectSystem(+tr.dataset.id));
@@ -736,7 +780,7 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
       <span class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold)">CREW ROLES</span>
       <span class="hint" style="margin-left:auto">${activeN} of ${plan.crew.length} pilots used</span>
       <label class="hint" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Automatically set surplus pilots to 'Not required' so the colony runs with the fewest characters"><input type="checkbox" id="autoFit" ${autoFit?'checked':''}> auto-fit</label>
-      <label class="hint" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Pack factories into the fewest planets that fit the CPU/PG budget. P4 still stays on Barren/Temperate."><input type="checkbox" id="consol" ${consolidate?'checked':''}> consolidate</label></div>
+      <label class="hint" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Pack factories into the fewest planets that fit the CPU/PG budget, with each step's facilities replicated in the throughput-balanced ratio (e.g. 2 P2 feeding 1 P3) so higher tiers aren't starved. P4 still stays on Barren/Temperate."><input type="checkbox" id="consol" ${consolidate?'checked':''}> consolidate</label></div>
     ${plan.crew.map(c=>{ const nr=c.role==='notreq'; const prodVal=(charProduct[c.id]&&sel[charProduct[c.id]]!=null)?charProduct[c.id]:(sel[target]!=null?target:selIds[0]);
       const drop=(c.role==='full'&&multi)?`<select class="cprod" data-id="${c.id}" style="width:auto;font-size:11px">${selIds.map(pid=>`<option value="${pid}" ${String(prodVal)===String(pid)?'selected':''}>${PI.recipe[pid].name}</option>`).join('')}</select>`:'';
       const cs=charSkills[c.id]; let tips=[],short='';
@@ -817,7 +861,7 @@ function setView(v){ if(v==='mine'){ viewing='mine'; renderMine(); }
   drawMap(); }
 // ---------- colony logistics: production → transfer routing ----------
 // ===== 3D colony pin + routing view (self-contained canvas, no external libs) =====
-let _l3dData=null, _l3dRAF=null, _l3dRot={yaw:0.6,pitch:-0.35}, _l3dZoom=1, _l3dDrag=null;
+let _l3dData=null, _l3dRAF=null, _l3dRot={yaw:0.6,pitch:-0.35}, _l3dZoom=1, _l3dPan={x:0,y:0}, _l3dDrag=null;
 function build3DGraph(planet, finals){
   const outs=(planet.outs||[]).slice(); const nodes=[]; const links=[];
   const PTC={cc:'var(--gold)',launch:'var(--cyan)',store:'var(--muted)',adv:'var(--cyan-bright)',htech:'var(--gold-bright)',ecu:'var(--amber)',basic:'var(--green)'};
@@ -825,15 +869,15 @@ function build3DGraph(planet, finals){
   const add=(id,label,type,lat,lon)=>{ const la=lat*Math.PI/180, lo=lon*Math.PI/180;
     const p=[Math.cos(la)*Math.sin(lo), Math.sin(la), Math.cos(la)*Math.cos(lo)];
     const n={id,label,type,p,col:colMap[type]}; nodes.push(n); return n; };
-  const cc=add('cc','Command Center','cc',62,0);
-  const lp=add('lp','Launchpad','launch',28,-46);
-  const st=add('st','Storage','store',28,46);
+  const cc=add('cc','Command Center','cc',56,0);
+  const lp=add('lp','Launchpad','launch',24,-38);
+  const st=add('st','Storage','store',24,38);
   const finalsSet=new Set(finals.map(Number)); const madeSet=new Set(outs.map(Number));
   // facilities ringed by tier
   const byTier={}; outs.forEach(o=>{ (byTier[PI.tier[o]]=byTier[PI.tier[o]]||[]).push(o); });
   const facById={};
-  Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-8-ti*26;
-    arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-66+132*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
+  Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-6-ti*19;
+    arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-52+104*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
       facById[o]=add('f'+o, PI.names[o], isHT?'htech':'adv', lat, lon); }); });
   // links: power backbone + production routes
   links.push({a:cc,b:lp,kind:'net'}); links.push({a:cc,b:st,kind:'net'}); links.push({a:lp,b:st,kind:'net'});
@@ -846,31 +890,31 @@ function build3DGraph(planet, finals){
 function rot3(p,yaw,pitch){ let x=p[0]*Math.cos(yaw)+p[2]*Math.sin(yaw), z=-p[0]*Math.sin(yaw)+p[2]*Math.cos(yaw), y=p[1];
   return [x, y*Math.cos(pitch)-z*Math.sin(pitch), y*Math.sin(pitch)+z*Math.cos(pitch)]; }
 function draw3D(){ const cv=document.getElementById('l3dCanvas'); if(!cv||!_l3dData) return; const ctx=cv.getContext('2d');
-  const W=cv.width, H=cv.height, cx=W/2, cy=H/2; const R=Math.min(W,H)*0.34*_l3dZoom;
+  const W=cv.width, H=cv.height, cx=W/2, cy=H/2; const R=Math.min(W,H)*0.26*_l3dZoom; const ox=cx+_l3dPan.x, oy=cy+_l3dPan.y;
   ctx.clearRect(0,0,W,H);
   // planet sphere
-  const g=ctx.createRadialGradient(cx-R*0.3,cy-R*0.3,R*0.1,cx,cy,R);
+  const g=ctx.createRadialGradient(ox-R*0.3,oy-R*0.3,R*0.1,ox,oy,R);
   g.addColorStop(0,_l3dData.ptColor); g.addColorStop(0.7,'#0a0d10'); g.addColorStop(1,'#05080b');
-  ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.fillStyle=g; ctx.fill();
-  ctx.strokeStyle='rgba(122,143,160,0.25)'; ctx.lineWidth=1;
-  for(let k=-60;k<=60;k+=30){ ctx.beginPath(); for(let lon=-180;lon<=180;lon+=6){ const la=k*Math.PI/180,lo=lon*Math.PI/180; const rp=rot3([Math.cos(la)*Math.sin(lo),Math.sin(la),Math.cos(la)*Math.cos(lo)],_l3dRot.yaw,_l3dRot.pitch); if(rp[2]<-0.02)continue; const sx=cx+rp[0]*R,sy=cy-rp[1]*R; lon===-180?ctx.moveTo(sx,sy):ctx.lineTo(sx,sy);} ctx.stroke(); }
-  const np=_l3dData.nodes.map(n=>{ const rp=rot3(n.p,_l3dRot.yaw,_l3dRot.pitch); return {n,rp,sx:cx+rp[0]*R,sy:cy-rp[1]*R,z:rp[2]}; });
+  ctx.beginPath(); ctx.arc(ox,oy,R,0,7); ctx.fillStyle=g; ctx.fill();
+  ctx.strokeStyle='rgba(122,143,160,0.2)'; ctx.lineWidth=1;
+  for(let k=-60;k<=60;k+=30){ ctx.beginPath(); let st=false; for(let lon=-180;lon<=180;lon+=6){ const la=k*Math.PI/180,lo=lon*Math.PI/180; const rp=rot3([Math.cos(la)*Math.sin(lo),Math.sin(la),Math.cos(la)*Math.cos(lo)],_l3dRot.yaw,_l3dRot.pitch); if(rp[2]<-0.02){st=false;continue;} const sx=ox+rp[0]*R,sy=oy-rp[1]*R; st?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); st=true;} ctx.stroke(); }
+  const np=_l3dData.nodes.map(n=>{ const rp=rot3(n.p,_l3dRot.yaw,_l3dRot.pitch); return {n,rp,sx:ox+rp[0]*R,sy:oy-rp[1]*R,z:rp[2]}; });
   const byId={}; np.forEach(o=>byId[o.n.id]=o);
   // links (behind first)
   _l3dData.links.slice().sort((a,b)=>((byId[a.a.id].z+byId[a.b.id].z)-(byId[b.a.id].z+byId[b.b.id].z))).forEach(l=>{
-    const A=byId[l.a.id],B=byId[l.b.id]; const front=(A.z+B.z)/2>0; ctx.globalAlpha=front?0.9:0.25;
-    ctx.strokeStyle=l.kind==='net'?'#2a4050':(l.col||'#8cc86a'); ctx.lineWidth=l.kind==='net'?1:2;
+    const A=byId[l.a.id],B=byId[l.b.id]; const front=(A.z+B.z)/2>0; ctx.globalAlpha=front?0.9:0.22;
+    ctx.strokeStyle=l.kind==='net'?'#2a4050':(l.col||'#8cc86a'); ctx.lineWidth=l.kind==='net'?1:1.8;
     ctx.beginPath(); ctx.moveTo(A.sx,A.sy); ctx.lineTo(B.sx,B.sy); ctx.stroke();
     if(l.kind==='route'){ const mx=(A.sx+B.sx)/2,my=(A.sy+B.sy)/2,an=Math.atan2(B.sy-A.sy,B.sx-A.sx);
-      ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(mx-7*Math.cos(an-0.4),my-7*Math.sin(an-0.4)); ctx.lineTo(mx-7*Math.cos(an+0.4),my-7*Math.sin(an+0.4)); ctx.closePath(); ctx.fillStyle=l.col||'#8cc86a'; ctx.fill(); }
+      ctx.beginPath(); ctx.moveTo(mx,my); ctx.lineTo(mx-6*Math.cos(an-0.4),my-6*Math.sin(an-0.4)); ctx.lineTo(mx-6*Math.cos(an+0.4),my-6*Math.sin(an+0.4)); ctx.closePath(); ctx.fillStyle=l.col||'#8cc86a'; ctx.fill(); }
   });
   ctx.globalAlpha=1;
-  // nodes depth-sorted
-  np.slice().sort((a,b)=>a.z-b.z).forEach(o=>{ const front=o.z>-0.05; ctx.globalAlpha=front?1:0.35; const rad=(o.n.type==='cc'?9:o.n.type==='htech'?8:7)*(0.7+0.3*(o.z+1)/2);
-    ctx.beginPath(); ctx.arc(o.sx,o.sy,rad,0,7); ctx.fillStyle=o.n.col; ctx.fill(); ctx.lineWidth=1.5; ctx.strokeStyle='#05080b'; ctx.stroke();
-    if(front){ ctx.fillStyle='#0a0d10'; ctx.font='bold 9px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  // nodes depth-sorted (marker size fixed so the cluster stays compact while zooming)
+  np.slice().sort((a,b)=>a.z-b.z).forEach(o=>{ const front=o.z>-0.05; ctx.globalAlpha=front?1:0.32; const rad=(o.n.type==='cc'?7:o.n.type==='htech'?6.5:6)*(0.75+0.25*(o.z+1)/2);
+    ctx.beginPath(); ctx.arc(o.sx,o.sy,rad,0,7); ctx.fillStyle=o.n.col; ctx.fill(); ctx.lineWidth=1.2; ctx.strokeStyle='#05080b'; ctx.stroke();
+    if(front){ ctx.fillStyle='#0a0d10'; ctx.font='bold 8px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.fillText(o.n.type==='cc'?'C':o.n.type==='launch'?'L':o.n.type==='store'?'S':o.n.type==='htech'?'H':o.n.type==='ecu'?'E':'F', o.sx,o.sy+0.5);
-      ctx.fillStyle='#c9d4db'; ctx.font='10px monospace'; ctx.textAlign='left'; ctx.fillText(o.n.label, o.sx+rad+3, o.sy+0.5); } });
+      ctx.fillStyle='#c9d4db'; ctx.font='9px monospace'; ctx.textAlign='left'; ctx.fillText(o.n.label, o.sx+rad+3, o.sy+0.5); } });
   ctx.globalAlpha=1;
 }
 function loop3D(){ draw3D(); _l3dRAF=requestAnimationFrame(loop3D); }
@@ -879,7 +923,10 @@ function open3D(){ if(!_l3dData) return; let ov=document.getElementById('l3dOver
     ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(3,5,7,0.96);display:flex;flex-direction:column';
     ov.innerHTML=`<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)">
         <b style="color:var(--gold-bright)">3D colony layout &amp; routing</b><span id="l3dTitle" class="hint"></span>
-        <span class="hint" style="margin-left:auto">drag to rotate · scroll to zoom</span>
+        <span class="hint" style="margin-left:auto">drag rotate · shift/right-drag pan · scroll zoom</span>
+        <span id="l3dZout" class="navbtn" style="cursor:pointer;padding:3px 9px;border:1px solid var(--line2);color:var(--cyan);font-family:var(--mono)">－</span>
+        <span id="l3dZin" class="navbtn" style="cursor:pointer;padding:3px 9px;border:1px solid var(--line2);color:var(--cyan);font-family:var(--mono)">＋</span>
+        <span id="l3dZrst" class="navbtn" style="cursor:pointer;padding:3px 9px;border:1px solid var(--line2);color:var(--cyan);font-family:var(--mono)">⟲</span>
         <span id="l3dClose" style="cursor:pointer;padding:3px 10px;border:1px solid var(--line2);color:var(--cyan)">✕ close</span></div>
       <canvas id="l3dCanvas" style="flex:1;width:100%;touch-action:none"></canvas>
       <div class="hint" style="padding:8px 16px;border-top:1px solid var(--line);display:flex;gap:16px;flex-wrap:wrap">
@@ -890,12 +937,22 @@ function open3D(){ if(!_l3dData) return; let ov=document.getElementById('l3dOver
     document.getElementById('l3dClose').onclick=close3D;
     const cv=document.getElementById('l3dCanvas');
     const fit=()=>{ const r=cv.getBoundingClientRect(); cv.width=r.width; cv.height=r.height; }; setTimeout(fit,0); window.addEventListener('resize',fit);
-    cv.addEventListener('pointerdown',e=>{ _l3dDrag={x:e.clientX,y:e.clientY}; cv.setPointerCapture(e.pointerId); });
-    cv.addEventListener('pointermove',e=>{ if(!_l3dDrag)return; _l3dRot.yaw+=(e.clientX-_l3dDrag.x)*0.008; _l3dRot.pitch=Math.max(-1.4,Math.min(1.4,_l3dRot.pitch+(e.clientY-_l3dDrag.y)*0.008)); _l3dDrag={x:e.clientX,y:e.clientY}; });
+    let lastMx=null,lastMy=null;
+    const setZoom3=(f,ax,ay)=>{ const cx=cv.width/2, cy=cv.height/2; const Cx=(ax!=null?ax:(lastMx!=null?lastMx:cx)), Cy=(ay!=null?ay:(lastMy!=null?lastMy:cy));
+      const nz=Math.max(0.4,Math.min(8,_l3dZoom*f)); const g=nz/_l3dZoom;
+      _l3dPan.x = Cx - cx - (Cx - cx - _l3dPan.x)*g; _l3dPan.y = Cy - cy - (Cy - cy - _l3dPan.y)*g; _l3dZoom=nz; };
+    document.getElementById('l3dZin').onclick=()=>setZoom3(1.4);
+    document.getElementById('l3dZout').onclick=()=>setZoom3(1/1.4);
+    document.getElementById('l3dZrst').onclick=()=>{ _l3dZoom=1; _l3dPan={x:0,y:0}; _l3dRot={yaw:0.6,pitch:-0.35}; };
+    cv.addEventListener('contextmenu',e=>e.preventDefault());
+    cv.addEventListener('pointerdown',e=>{ _l3dDrag={x:e.clientX,y:e.clientY,pan:(e.button===2||e.shiftKey)}; cv.setPointerCapture(e.pointerId); });
+    cv.addEventListener('pointermove',e=>{ const r=cv.getBoundingClientRect(); lastMx=e.clientX-r.left; lastMy=e.clientY-r.top; if(!_l3dDrag)return; const dx=e.clientX-_l3dDrag.x, dy=e.clientY-_l3dDrag.y;
+      if(_l3dDrag.pan){ _l3dPan.x+=dx; _l3dPan.y+=dy; } else { _l3dRot.yaw+=dx*0.008; _l3dRot.pitch=Math.max(-1.4,Math.min(1.4,_l3dRot.pitch+dy*0.008)); }
+      _l3dDrag.x=e.clientX; _l3dDrag.y=e.clientY; });
     cv.addEventListener('pointerup',()=>_l3dDrag=null); cv.addEventListener('pointercancel',()=>_l3dDrag=null);
-    cv.addEventListener('wheel',e=>{ e.preventDefault(); _l3dZoom=Math.max(0.5,Math.min(3,_l3dZoom*(e.deltaY<0?1.1:0.9))); },{passive:false});
+    cv.addEventListener('wheel',e=>{ e.preventDefault(); const r=cv.getBoundingClientRect(); lastMx=e.clientX-r.left; lastMy=e.clientY-r.top; setZoom3(e.deltaY<0?1.12:1/1.12,lastMx,lastMy); },{passive:false});
   }
-  ov.style.display='flex';
+  ov.style.display='flex'; _l3dZoom=1; _l3dPan={x:0,y:0};
   const t=document.getElementById('l3dTitle'); if(t) t.textContent=`${SYS[_l3dData.planet.sys]?SYS[_l3dData.planet.sys][0]:''} · ${(typeof PNAME2!=='undefined'&&PNAME2[_l3dData.planet.pcode])||_l3dData.planet.pcode} · ${_l3dData.finals.map(f=>PI.recipe[f]?PI.recipe[f].name:f).join(', ')}`;
   const cv=document.getElementById('l3dCanvas'); const r=cv.getBoundingClientRect(); cv.width=r.width||800; cv.height=r.height||500;
   if(_l3dRAF) cancelAnimationFrame(_l3dRAF); loop3D();
