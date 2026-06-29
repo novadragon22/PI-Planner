@@ -368,8 +368,13 @@ function colonyPlan(target,sysId){
       if(p4.length) packL(p4.slice(),'adv',P4SET); };        // P4 High-Tech plant → Barren/Temperate only
     if(buyP1){ packAdvL(); }
     else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,(PI.tier[prod]>=4)?P4SET:null); if(!got) continue;
-        const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p)); let heads=10; while(heads>1&&(FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu>cpuB||FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg>pgB))heads--; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu,pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg; let basics=0; while(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB&&basics<6){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;basics++;}
-        res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
+        const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p));
+        let cpu=FAC.launch.cpu,pg=FAC.launch.pg,ecus=0,heads=0,basics=0;
+        const addECU=()=>{ let hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh<1)return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        addECU(); while(addBasic()){}
+        if(basics===0) continue;
+        res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fcount:p1?{[p1]:basics}:{},fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       packAdvL(); }
     return res; };
   let mode, note;
@@ -384,17 +389,24 @@ function colonyPlan(target,sysId){
     if(buildShared){ for(const p of p0){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]);
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
       let want = (consolidate && p1) ? Math.max(1, Math.round(p1Need[p1]||1)) : null; // total Basic facilities to build for this P1 (null → one planet, filled to budget)
-      let placedAny=false;
+      let placedAny=false, lastBasics=8;
       while(true){ const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
         const got=claim(cw.id,codes,(!roleMode && hasP4plan)?P4SET:null);
-        if(!got){ if(!placedAny) unassigned.push(p); else { overflow=true; extOver += (want!=null?Math.max(1,Math.ceil(want/6)):1); } break; }
-        let heads=10; while(heads>1&&(FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu>cpuB||FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg>pgB))heads--; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
-        const cap = (want==null)?6:Math.min(6,want); let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<cap){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
-        const fb={}; if(p1) fb[p1]=basics;
+        if(!got){ if(!placedAny) unassigned.push(p); else { overflow=true; extOver += (want!=null?Math.max(1,Math.ceil(want/lastBasics)):1); } break; }
+        // pack this planet to its CPU/PG: Extractor Control Unit(s) + heads, then as many Basic facilities (P1) as fit, before spawning another planet
+        let cpu=FAC.launch.cpu, pg=FAC.launch.pg, ecus=0, heads=0, basics=0;
+        const addECU=()=>{ let hh=10; while(hh>0 && (cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB || pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB)) hh--; if(hh<1) return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        addECU();
+        while((want==null || basics<want) && addBasic()){}
+        // still want more P1 and grid left → add another extractor (+heads) and keep filling basics
+        while(want!=null && basics<want){ if(!addECU()) break; if(!addBasic()) break; while(basics<want && addBasic()){} }
+        if(basics===0){ if(!placedAny) unassigned.push(p); else { overflow=true; extOver += (want!=null?Math.max(1,Math.ceil(want/lastBasics)):1); } break; }
+        lastBasics=basics; const fb={}; if(p1) fb[p1]=basics;
         planets.push({title:`${PNAME2[got.code]}`, sub:'Extraction + P1', who:cw.name, whoId:cw.id, sys:sysId, kind:'extract', pcode:got.code, ci:got.ci, outs:p1?[+p1]:[], ins:[], fcount:fb,
-          fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
+          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
           cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); placedAny=true;
-        if(want==null) break; want-=Math.max(basics,0); if(basics===0 || want<=0) break; if(planets.length>60) break; } }
+        if(want==null) break; want-=basics; if(want<=0) break; if(planets.length>60) break; } }
       packAdv(nextFactory); }
   }
   // full-role characters: each runs their own complete colony for an assigned product
@@ -412,10 +424,12 @@ function colonyPlan(target,sysId){
         const cw=nextExtractor?nextExtractor():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
         if(cw.id!=null) feederOwners.add(cw.id);
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
-        let heads=10; while(heads>1&&(FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu>cpuB||FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg>pgB))heads--; let cpu=FAC.ecu.cpu+heads*FAC.ecu.headCpu+FAC.launch.cpu, pg=FAC.ecu.pg+heads*FAC.ecu.headPg+FAC.launch.pg;
-        let basics=0; while(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB && basics<6){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; }
-        planets.push({title:`${PNAME2[pick]} · ${SYS[fsug.id][0]} (feeder)`, sub:`Feeder colony — ${SYS[fsug.id][0]} · ${fsug.jumps} jump${fsug.jumps!==1?'s':''} from main`, who:cw.name, whoId:cw.id, feeder:true, sys:fsug.id, kind:'feeder', pcode:pick, outs:p1?[+p1]:[], ins:[],
-          fac:`Extractor Control Unit · ${heads} heads → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
+        let cpu=FAC.launch.cpu, pg=FAC.launch.pg, ecus=0, heads=0, basics=0;
+        const addECU=()=>{ let hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh<1)return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        addECU(); while(addBasic()){}
+        planets.push({title:`${PNAME2[pick]} · ${SYS[fsug.id][0]} (feeder)`, sub:`Feeder colony — ${SYS[fsug.id][0]} · ${fsug.jumps} jump${fsug.jumps!==1?'s':''} from main`, who:cw.name, whoId:cw.id, feeder:true, sys:fsug.id, kind:'feeder', pcode:pick, outs:p1?[+p1]:[], ins:[], fcount:p1?{[p1]:basics}:{},
+          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
           cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       unassigned.length=0; still.forEach(p=>unassigned.push(p));
       feederInfo={id:fsug.id, jumps:fsug.jumps, owners:[...feederOwners].map(i=>{const c=crew.find(x=>String(x.id)===String(i));return c?c.name:null;}).filter(Boolean)}; }
