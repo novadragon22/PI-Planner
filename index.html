@@ -318,8 +318,9 @@ function colonyPlan(target,sysId){
       const pick=claim(cw.id,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B'));
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
+      const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
       planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id, sys:sysId, kind:kind==='adv'?'factory':'basic', pcode:code, ci:pick?pick.ci:null,
-        outs:[...new Set(made)], ins:kind==='adv'?advIns(made):[],
+        outs:[...new Set(made)], fcount, ins:kind==='adv'?advIns(made):[],
         fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
@@ -337,8 +338,9 @@ function colonyPlan(target,sysId){
       const outpost = psys!==sysId; if(outpost){ p4outpostInfo=p4outpostInfo||[]; if(!p4outpostInfo.some(o=>o.id===psys)) p4outpostInfo.push({id:psys,jumps}); }
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
       while(rem.length && made.length<CAP){ const o=rem[0]; const fc=PI.tier[o]>=4?FAC.htech:FAC.adv; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
+      const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
       planets.push({title:`${PNAME2[pick.code]} (factory)${outpost?' · '+SYS[psys][0]+' (P4 outpost)':''}`, sub: outpost?`P4 outpost — ${SYS[psys][0]} · ${jumps} jump${jumps!==1?'s':''} from main`:'P1 → P2 → P3 → P4 in-place', who:cw.name, whoId:cw.id, sys:psys, kind:'factory', pcode:pick.code, ci:pick.ci, p4outpost:outpost,
-        outs:[...new Set(made)], ins:advIns(made), fac:`${facLine(made)}<br>1× Launchpad · 1× Storage Facility`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        outs:[...new Set(made)], fcount, ins:advIns(made), fac:`${facLine(made)}<br>1× Launchpad · 1× Storage Facility`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
   // pack advanced facilities. A P4 target runs its WHOLE chain (P2→P3→P4) on one Barren/Temperate line
   // (Advanced Industry Facilities for the intermediates + the High-Tech plant), fed by P1. Non-P4 targets go on any non-B/T planet.
@@ -359,7 +361,8 @@ function colonyPlan(target,sysId){
     const packL=(rem,kind,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic, fname=kind==='adv'?'Advanced':'Basic', sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
       while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
         while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB&&pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
-        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:made.slice(),ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+        const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
+        res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}<br>1× Launchpad · 1× Storage Facility`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
         if(res.length>60)break; } };
     const packAdvL=()=>{ if(PI.tier[prod]>=4) packL(advl.slice(),'adv',P4SET); else packL(advl.slice(),'adv',null,P4SET); };
     if(buyP1){ packAdvL(); }
@@ -995,18 +998,22 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const p1Leaves=tid=>{ const out=new Set(); (function rec(x){ const r=PI.recipe[x]; if(!r) return; r.in.forEach(([y])=>{ y=+y; if(PI.tier[y]===1) out.add(y); else rec(String(y)); }); })(String(tid)); return [...out]; };
   const targets=(allProducts&&Object.keys(sel).length)?Object.keys(sel).map(Number):[target];
   const items=targets.map(t=>({t, p:facPlanets.find(pp=>(pp.outs||[]).map(Number).includes(+t))})).filter(x=>x.p);
+  const facTotOf=p=>Object.values(p.fcount||{}).reduce((s,n)=>s+n,0);
   const facCrew=[...new Set(items.map(x=>String(x.p.whoId)))]; const multiFac=facCrew.length>1;
   const facRowFor=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts.size||exOuts.has(x));
     const depTxt=deps.map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
     return `<tr class="facrow" data-fac="${it.t}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)} <span class="hint">▸ layout</span></td></tr>`; };
   let facRows;
-  if(consolidate){ // one row per consolidated planet: all its P1 deposits → all its final products
-    const byPlanet=new Map(); items.forEach(it=>{ if(!byPlanet.has(it.p)) byPlanet.set(it.p,[]); byPlanet.get(it.p).push(it.t); });
-    facRows=[...byPlanet.entries()].map(([p,ts])=>{ const deps=new Set(); ts.forEach(t=>p1Leaves(t).filter(x=>!exOuts.size||exOuts.has(x)).forEach(x=>deps.add(x)));
-      const depTxt=[...deps].map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
-      const prodTxt=ts.map(t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t)).join(', ');
+  if(consolidate){ // one row per factory planet (incl. intermediate-only planets from the balanced spread)
+    const nmF=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
+    facRows=facAll.map(p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
+      const imports=(p.ins||[]).filter(x=>!made.includes(+x)); // hauled in: P1 deposits or intermediates from other planets
+      const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x}`).join(', ')||'<span class="hint">—</span>';
+      const prodTxt=made.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${nmF(o)}`).join(', ');
+      const clickT=made.find(o=>targets.map(Number).includes(o))??made[0];
       const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
-      return `<tr class="facrow" data-fac="${ts[0]}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; }).join('');
+      const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
+      return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; }).join('');
   } else if(multiFac){ const groups=new Map(); items.forEach(it=>{ const k=String(it.p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(it); });
     facRows=[...groups.values()].map(g=>{ const who=g[0].p.who||'unassigned'; const role=whoRole[g[0].p.whoId]||'—';
       const hdr=`<tr style="background:rgba(201,168,104,.06)"><td colspan="3" style="padding:5px 10px;color:var(--cyan)"><b>${who}</b> <span class="hint">(${role})</span></td></tr>`;
@@ -1020,14 +1027,18 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>${p4banner}${p4out}${p4warn}`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· click a ${consolidate?'planet':'product'} for its build layout</span></div>
+  const facAll=plan.planets.filter(p=>p.kind==='factory'); const facTotalCnt=facAll.reduce((s,p)=>s+facTotOf(p),0);
+  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · click a ${consolidate?'planet':'product'} for its build layout</span></div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Produces</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   // ----- drill-down: full build layout for one final product -----
   const layoutHtml=T=>{ const nm=t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t);
     const planetFor=prod=>plan.planets.find(p=>(p.outs||[]).map(Number).includes(+prod));
+    const facCountOf=prod=>plan.planets.reduce((s,p)=>s+((p.fcount&&p.fcount[prod])||0),0);
+    const planetsFor=prod=>plan.planets.filter(p=>p.fcount&&p.fcount[prod]);
     const finPl=planetFor(T);
     // when consolidated, show every targeted final product that shares this planet (the whole planet's build), else just T
-    const finals = (consolidate && finPl) ? targets.filter(t=>(finPl.outs||[]).map(Number).includes(+t)) : [T];
+    const finalsArr = (consolidate && finPl) ? targets.filter(t=>(finPl.outs||[]).map(Number).includes(+t)) : [T];
+    const finals = finalsArr.length ? finalsArr : [T];
     const finalsSet = new Set(finals.map(Number));
     const byTier={}, seen=new Set();
     finals.forEach(F=>(function rec(x){ x=+x; const r=PI.recipe[x]; if(!r) return; const tr=PI.tier[x];
@@ -1044,10 +1055,11 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
         const ins=r.in.map(([y,q])=>`${q} ${nm(y)}`).join('  +  '); const fin=finalsSet.has(+prod);
         const isHT=PI.tier[prod]>=4; const ptype=pl?(PNAME2[pl.pcode]||pl.pcode):'';
         const fclabel=isHT?'High-Tech Production Plant':'Advanced Industry Facility';
-        const loc = pl? `${des(pl)} · ${ptype}${pl.who?' · '+pl.who:''}` : 'unplaced';
+        const cnt=facCountOf(prod)||1; const pls=planetsFor(prod);
+        const loc = pl? `${des(pl)} · ${ptype}${pls.length>1?` <span class="hint">+${pls.length-1} more planet${pls.length>2?'s':''}</span>`:''}${pl.who?' · '+pl.who:''}` : 'unplaced';
         h+=`<div style="margin:3px 14px;padding:6px 10px;border:1px solid ${fin?'var(--gold-dim)':isHT?'var(--line2)':'var(--line)'};${fin?'background:rgba(201,168,104,.08)':''}">
           <div><b style="color:${fin?'var(--gold-bright)':'var(--cyan-bright)'}">${nm(prod)}</b>${fin?' <span class="hint">· FINAL PRODUCT</span>':''} <span class="hint">@ ${loc}</span></div>
-          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> <b>${r.out}</b> ${nm(prod)} <span style="color:var(--muted2)">/ ${cyc} cycle</span> · ${fclabel}${isHT?' <span style="color:var(--gold)">(Barren/Temperate only)</span>':''}${fin?' · <span style="color:var(--gold)">export point</span>':''}</div></div>`; }); });
+          <div class="hint" style="margin-top:2px">${ins} <span style="color:var(--green)">→</span> <b>${r.out}</b> ${nm(prod)} <span style="color:var(--muted2)">/ ${cyc} cycle</span> · <b style="color:${fin?'var(--gold-bright)':'var(--cyan)'}">${cnt}×</b> ${fclabel}${isHT?' <span style="color:var(--gold)">(Barren/Temperate only)</span>':''}${fin?' · <span style="color:var(--gold)">export point</span>':''}</div></div>`; }); });
     // production ratios — facilities (and P0 extraction) to keep the line balanced by cycle time
     const facRatios=F=>{ const need={F:1}, p0={};
       chainTiers(F).slice().sort((a,b)=>PI.tier[b]-PI.tier[a]).forEach(X=>{ const r=PI.recipe[X]; if(!r||!need[X]) return; const cphX=3600/r.ct;
@@ -1069,7 +1081,8 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
       ${finals.map(F=>{ const fvol=VOL[PI.tier[F]]||1; const fpl=planetFor(F); return `<div style="margin-top:3px">• <b style="color:var(--gold-bright)">Final product buffer</b> — ${nm(F)} (${fvol} m³): a Launchpad holds ≈ <b>${cf(LP/fvol)}</b> units before launch${fpl?` — export from <b>${des(fpl)}</b>`:''}. Add a Storage Facility (≈ ${cf(SF/fvol)} units) if you export less often.</div>`; }).join('')}
       <div style="margin-top:3px;color:var(--muted2)">Every factory planet in this plan already carries 1× Launchpad + 1× Storage Facility (in its CPU/PG budget). Spare grid → add Storage Facilities on the busiest planets to extend buffer and uptime.</div></div>`;
     return h; };
-  if(logiFactory!=null && items.some(it=>+it.t===+logiFactory)){
+  const canLayout=t=>plan.planets.some(p=>p.kind==='factory' && ((p.fcount&&p.fcount[+t])||(p.outs||[]).map(Number).includes(+t)));
+  if(logiFactory!=null && canLayout(logiFactory)){
     $('resBody').innerHTML=`<tr><td style="padding:0">${layoutHtml(+logiFactory)}</td></tr>`;
     if($('logiBack')) $('logiBack').onclick=()=>{ logiFactory=null; renderLogistics(); };
     { const T=+logiFactory; const pf=plan.planets.find(p=>(p.outs||[]).map(Number).includes(T));
