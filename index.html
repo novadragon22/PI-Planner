@@ -406,9 +406,17 @@ function colonyPlan(target,sysId){
         const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
         res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}${storeLine(st.stores)}`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
         if(res.length>60)break; } };
+    const ownerGet=()=>({bud:[cpuB,pgB],name:ownerName,id:ownerId});
     const packAdvL=()=>{ const p4=advl.filter(o=>PI.tier[o]>=4), low=advl.filter(o=>PI.tier[o]<4);
-      if(low.length) packL(low.slice(),'adv',null,P4SET);   // P2/P3 Advanced facilities → any planet (avoid B/T)
-      if(p4.length) packL(p4.slice(),'adv',P4SET); };        // P4 High-Tech plant → Barren/Temperate only
+      if(low.length){
+        if(consolidate){ // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
+          const facAll=facBalance([prod]); const topLow=Math.max(...low.map(o=>PI.tier[o]));
+          const shipped=[...new Set(low.filter(o=>PI.tier[o]===topLow || +o===+prod))];
+          const noOf={}; shipped.forEach(o=>noOf[o]=Math.max(1,Math.round(facAll[o]||1)));
+          packFacChain(shipped, noOf, ownerGet); // pushes staged planets straight onto the shared planet list for this owner
+        } else packL(low.slice(),'adv',null,P4SET);
+      }
+      if(p4.length) packL(p4.slice(),'adv',P4SET); };        // P4 High-Tech plant → Barren/Temperate only (deposit = P3 hauled from this owner's P3 planets)
     if(buyP1){ packAdvL(); }
     else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,(PI.tier[prod]>=4)?P4SET:null); if(!got) continue;
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p));
