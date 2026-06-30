@@ -331,7 +331,31 @@ function colonyPlan(target,sysId){
         fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}${storeLine(st.stores)}`,
         cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
       if(planets.length>60) break; } };
-  // nearest systems (by jumps from the colony) that still have a free Barren/Temperate planet for this owner — for P4 overflow
+  // pack the low chain so each planet makes a set of top-low products (P3) PLUS just enough shared lower-tier (P2) facilities to feed them,
+  // so feeder tiers are produced AND consumed in place — never a deposit or a shipment, visible only in the 3D layout. P2 is shared across the P3s on the planet (not duplicated per P3).
+  const packFacChain=(shipped,noOf,getCrew)=>{
+    const demOf=o=>{ const b=facBalance([o]); const m={}; Object.keys(b).forEach(p=>{ if(+p!==+o && PI.tier[p]>=2 && PI.tier[p]<PI.tier[o]) m[+p]=b[p]; }); return m; };
+    const dem={}; shipped.forEach(o=>dem[o]=demOf(o));
+    const remaining={}; shipped.forEach(o=>remaining[o]=Math.max(1,Math.round(noOf[o]||1)));
+    const p2cnt=need=>Object.keys(need).reduce((s,p)=>s+Math.ceil(need[p]||0),0);
+    let guard=0;
+    while(shipped.some(o=>remaining[o]>0)){ if(++guard>500) break;
+      const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
+      const pick=claim(cw.id,null,P4SET); if(!pick){ overflow=true; facOver++; } const code=pick?pick.code:(POOL[0]?POOL[0].code:'B');
+      let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[]; let p2need={}, placedP2=0, progress=true;
+      while(progress){ progress=false;
+        for(const o of shipped){ if(remaining[o]<=0) continue;
+          const nn=Object.assign({},p2need); const d=dem[o]; Object.keys(d).forEach(p=>nn[p]=(nn[p]||0)+d[p]);
+          const addFac=1+(p2cnt(nn)-placedP2);
+          if(made.length+addFac<=CAP && cpu+addFac*FAC.adv.cpu<=cpuB && pg+addFac*FAC.adv.pg<=pgB){
+            made.push(o); cpu+=addFac*FAC.adv.cpu; pg+=addFac*FAC.adv.pg; placedP2=p2cnt(nn); p2need=nn; remaining[o]--; progress=true; } } }
+      if(!made.length){ overflow=true; facOver++; break; }
+      Object.keys(p2need).forEach(p=>{ const c=Math.ceil(p2need[p]||0); for(let k=0;k<c;k++) made.push(+p); }); // shared feeder facilities (already budgeted)
+      const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
+      const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
+      planets.push({title:`${PNAME2[code]} (factory)`, sub:'P1 → P2 → P3 in-place', who:cw.name, whoId:cw.id, sys:sysId, kind:'factory', pcode:code, ci:pick?pick.ci:null,
+        outs:[...new Set(made)], fcount, ins:advIns(made), fac:`${facLine(made)}${storeLine(st.stores)}`, cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
+      if(planets.length>60) break; } };
   let _btCands=null;
   const btCands=()=>{ if(_btCands) return _btCands; let dist={}; try{ dist=(typeof bfs==='function'?bfs(sysId):{})||{}; }catch(e){ dist={}; }
     _btCands=Object.keys(dist).filter(id=>+id!==+sysId && dist[id]<=15).sort((a,b)=>dist[a]-dist[b]).map(id=>({id:+id,jumps:dist[id]})); return _btCands; };
@@ -361,7 +385,17 @@ function colonyPlan(target,sysId){
     const p4Finals=planProds.map(Number).filter(t=>PI.tier[t]>=4);
     const lowFinals=planProds.map(Number).filter(t=>PI.tier[t]>=2);
     if(p4prods.length) packP4(expand(p4prods, p4Finals.length?p4Finals:p4prods), getCrew);                 // High-Tech plants → Barren/Temperate only (with adjacent-system overflow)
-    if(lowProds.length) packFac(expand(lowProds, lowFinals.length?lowFinals:lowProds),'adv',getCrew,null,P4SET); }; // P1→P2→P3 facilities → any planet (avoid B/T so it stays free for P4)
+    if(lowProds.length){
+      if(consolidate){
+        // build self-contained units: each top-low product (P3, or a low-tier final) bundled with the P2 facilities feeding it, so P2 stays internal (deposit = P1, ships = P3)
+        const facAll=facBalance(lowFinals.length?lowFinals:advOuts);
+        const topLow=Math.max(...lowProds.map(o=>PI.tier[o]));
+        const tgt=planProds.map(Number);
+        const shipped=[...new Set(lowProds.filter(o=>PI.tier[o]===topLow || tgt.includes(o)))];
+        const noOf={}; shipped.forEach(o=>noOf[o]=Math.max(1,Math.round(facAll[o]||1)));
+        packFacChain(shipped, noOf, getCrew);
+      } else packFac(expand(lowProds, lowFinals.length?lowFinals:lowProds),'adv',getCrew,null,P4SET);
+    } };
   // build a COMPLETE chain (extraction + factory) for one product on one owner's own planets/budget
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
     const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=2);
