@@ -835,13 +835,16 @@ function renderColony(){ if(!chosen||!target){ viewing='list'; renderResults(); 
     ${plan.crew.map(c=>{ const nr=c.role==='notreq'; const prodVal=(charProduct[c.id]&&sel[charProduct[c.id]]!=null)?charProduct[c.id]:(sel[target]!=null?target:selIds[0]);
       const drop=(c.role==='full'&&multi)?`<select class="cprod" data-id="${c.id}" style="width:auto;font-size:11px">${selIds.map(pid=>`<option value="${pid}" ${String(prodVal)===String(pid)?'selected':''}>${PI.recipe[pid].name}</option>`).join('')}</select>`:'';
       const cs=charSkills[c.id]; let tips=[],short='';
-      if(cs&&!nr){ if(cs.ic<5) tips.push(`Interplanetary Consolidation ${ROMAN[cs.ic]}→V = up to +${5-cs.ic} planet${5-cs.ic>1?'s':''}`);
-        if(cs.ccu<5){ const g=CCU_BUDGET[5][0]-CCU_BUDGET[cs.ccu][0]; tips.push(`Command Center Upgrades ${ROMAN[cs.ccu]}→V = +${g.toLocaleString()} CPU`); }
-        if(tips.length) short = cs.ic<5?`⬆ +${5-cs.ic} planet${5-cs.ic>1?'s':''}`:'⬆ +CPU'; }
-      const maxed = cs && !nr && cs.ic>=5 && cs.ccu>=5;
+      const piLvl=sid=>(cs&&cs.pi&&cs.pi[sid]!=null)?cs.pi[sid]:(sid===2495?(cs?cs.ic:0):(sid===2505?(cs?cs.ccu:0):0));
+      if(cs&&!nr){ for(const [sid,nm,eff] of PISKILLS){ const lv=piLvl(sid); if(lv>=5) continue;
+          if(sid===2495) tips.push(`Interplanetary Consolidation ${ROMAN[lv]}→V = up to +${5-lv} planet${5-lv>1?'s':''}`);
+          else if(sid===2505){ const g=CCU_BUDGET[5][0]-CCU_BUDGET[lv][0]; tips.push(`Command Center Upgrades ${ROMAN[lv]}→V = +${g.toLocaleString()} CPU`); }
+          else tips.push(`${nm} ${ROMAN[lv]}→V — ${eff}`); }
+        if(tips.length) short = cs.ic<5?`⬆ +${5-cs.ic} planet${5-cs.ic>1?'s':''}`:(cs.ccu<5?'⬆ +CPU':'⬆ train PI'); }
+      const maxed = cs && !nr && PISKILLS.every(([sid])=>piLvl(sid)>=5);
       const upBadge = maxed
-        ? `<span title="Interplanetary Consolidation V and Command Center Upgrades V — PI skills maxed" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--green);border:1px solid var(--green);padding:2px 6px;white-space:nowrap">✓ maxed</span>`
-        : short?`<span class="skup" title="${tips.join(' · ')} — training this raises this character's own capacity and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
+        ? `<span title="All PI skills at V — Command Center Upgrades, Interplanetary Consolidation, Remote Sensing, Planetology, Advanced Planetology" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--green);border:1px solid var(--green);padding:2px 6px;white-space:nowrap">✓ maxed</span>`
+        : short?`<span class="skup" title="${tips.join(' · ')} — training these raises this character's own capacity/yield and can avoid needing another alt" style="margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--amber);border:1px solid var(--amber);padding:2px 6px;white-space:nowrap;cursor:help">${short}</span>`:'';
       return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0;flex-wrap:wrap;${nr?'opacity:.5':''}">
       <span style="font-size:12px">${c.name} <span class="hint" style="color:var(--muted2)">· ${nr?'not required':c.cap+' planets · CPU '+c.bud[0]}</span></span>
       ${rb(c,'extract','Extractor')}${rb(c,'factory','Factory')}${rb(c,'full','Full')}${rb(c,'notreq','Not required')}${nr?'':drop}${nr?'':upBadge}
@@ -1061,8 +1064,12 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     facRows=facAll.map(p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
       const imports=(p.ins||[]).filter(x=>!made.includes(+x)); // hauled in: P1 deposits or intermediates from other planets
       const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x}`).join(', ')||'<span class="hint">—</span>';
-      const prodTxt=made.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${nmF(o)}`).join(', ');
-      const clickT=made.find(o=>targets.map(Number).includes(o))??made[0];
+      const tgt=targets.map(Number);
+      // what actually leaves this planet = products made here that no other facility on the SAME planet consumes (finals, or intermediates hauled to a different factory). Internal intermediates stay hidden — see ▸ layout.
+      const leaves=made.filter(o=>!made.some(m2=>m2!==o && PI.recipe[m2] && PI.recipe[m2].in.some(([x])=>+x===+o)));
+      const prodList=leaves.length?leaves:made;
+      const prodTxt=prodList.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${tgt.includes(+o)?'':'<span style="color:var(--cyan)" title="intermediate material hauled to another factory">P'+PI.tier[o]+'</span> '}${nmF(o)}`).join(', ');
+      const clickT=leaves.find(o=>tgt.includes(o))??leaves[0]??made[0];
       const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
       const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
       return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; }).join('');
@@ -1080,7 +1087,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · click a ${consolidate?'planet':'product'} for its build layout</span></div>
-    <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Produces</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
+    <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Ships out</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   // ----- drill-down: full build layout for one final product -----
   const layoutHtml=T=>{ const nm=t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t);
     const planetFor=prod=>plan.planets.find(p=>(p.outs||[]).map(Number).includes(+prod));
@@ -1372,7 +1379,7 @@ cv.addEventListener('pointerup',e=>{ dn=false; if(dragged||!pts.length)return; c
 function flashSystem(id){ chosen=id; drawMap(); }
 async function loadSkills(id){ try{ const sk=await eGet(id,`/characters/${id}/skills/`);
     const m={}; (sk.skills||[]).forEach(s=>{ m[s.skill_id]=s.trained_skill_level; skillMap[s.skill_id]=Math.max(skillMap[s.skill_id]||0,s.trained_skill_level); });
-    charSkills[id]={ ic:m[2495]||0, ccu:m[2505]||0, acc:m[16622]||0, br:m[3446]||0 };
+    charSkills[id]={ ic:m[2495]||0, ccu:m[2505]||0, acc:m[16622]||0, br:m[3446]||0, pi:{2505:m[2505]||0,2495:m[2495]||0,13279:m[13279]||0,2406:m[2406]||0,2403:m[2403]||0} };
     if(skillMap[2495]!=null) icOverride=skillMap[2495]; if(skillMap[2505]!=null) ccuOverride=skillMap[2505];
     if(viewing==='colony'&&chosen&&target) renderColony();
   }catch(e){} }
