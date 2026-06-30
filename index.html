@@ -1098,13 +1098,19 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     return `<tr class="facrow" data-fac="${it.t}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)} <span class="hint">▸ layout</span></td></tr>`; };
   const nmF=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
   const tgt=targets.map(Number);
+  // material quantities, scaled to the amounts entered in Market & shopping list (sel) via the shared bom(); split across planets by each planet's share of that product's facilities
+  const basketBom={}; Object.keys(sel).forEach(pid=>{ if(PI.recipe[pid]){ const c=bom(+pid,Math.max(1,sel[pid]||1)); for(const t in c) basketBom[t]=(basketBom[t]||0)+(c[t]||0); } });
+  const facTotById={}; facAll.forEach(q=>Object.entries(q.fcount||{}).forEach(([o,n])=>{ facTotById[o]=(facTotById[o]||0)+n; }));
+  const qfmt=n=>{ n=Math.round(n); return n>=1000?n.toLocaleString():String(n); };
+  const unitsOnP=(p,o)=>{ const F=facTotById[o]||0; const tot=basketBom[o]||0; return F?tot*((p.fcount[o]||0)/F):tot; };
   // one row per ACTUAL factory planet (matches the colony layout / candidates) — deposit = what's hauled in, ships = what leaves (on-planet intermediates stay internal, see ▸ layout)
   const facPlanetRow=p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
-    const imports=(p.ins||[]).filter(x=>!made.includes(+x));
-    const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x}`).join(', ')||'<span class="hint">—</span>';
+    const depQty={}; made.forEach(o=>{ const r=PI.recipe[o]; if(!r) return; const u=unitsOnP(p,o); r.in.forEach(([d,q])=>{ d=+d; if(!made.includes(d)) depQty[d]=(depQty[d]||0)+u*(q/(r.out||1)); }); });
+    const imports=Object.keys(depQty).map(Number).sort((a,b)=>PI.tier[a]-PI.tier[b]);
+    const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x} <b style="color:var(--gold-bright)">×${qfmt(depQty[x])}</b>`).join(', ')||'<span class="hint">—</span>';
     const leaves=made.filter(o=>!made.some(m2=>m2!==o && PI.recipe[m2] && PI.recipe[m2].in.some(([x])=>+x===+o)));
     const prodList=leaves.length?leaves:made;
-    const prodTxt=prodList.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${tgt.includes(+o)?'':'<span style="color:var(--cyan)" title="intermediate material hauled to another factory">P'+PI.tier[o]+'</span> '}${nmF(o)}`).join(', ');
+    const prodTxt=prodList.map(o=>`${tgt.includes(+o)?'':'<span style="color:var(--cyan)" title="intermediate material hauled to another factory">P'+PI.tier[o]+'</span> '}${nmF(o)} <b>×${qfmt(unitsOnP(p,o))}</b>`).join(', ');
     const clickT=leaves.find(o=>tgt.includes(o))??leaves[0]??made[0];
     const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
     const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
@@ -1124,7 +1130,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>${p4banner}${p4out}${p4warn}`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · click a ${consolidate?'planet':'product'} for its build layout</span></div>
+  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · ×qty = units for your basket amounts · click a ${consolidate?'planet':'product'} for its build layout</span></div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Ships out</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   // ----- drill-down: full build layout for one final product -----
   const layoutHtml=T=>{ const nm=t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t);
