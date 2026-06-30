@@ -386,15 +386,12 @@ function colonyPlan(target,sysId){
     const lowFinals=planProds.map(Number).filter(t=>PI.tier[t]>=2);
     if(p4prods.length) packP4(expand(p4prods, p4Finals.length?p4Finals:p4prods), getCrew);                 // High-Tech plants → Barren/Temperate only (with adjacent-system overflow)
     if(lowProds.length){
-      if(consolidate){
-        // build self-contained units: each top-low product (P3, or a low-tier final) bundled with the P2 facilities feeding it, so P2 stays internal (deposit = P1, ships = P3)
-        const facAll=facBalance(lowFinals.length?lowFinals:advOuts);
-        const topLow=Math.max(...lowProds.map(o=>PI.tier[o]));
-        const tgt=planProds.map(Number);
-        const shipped=[...new Set(lowProds.filter(o=>PI.tier[o]===topLow || tgt.includes(o)))];
-        const noOf={}; shipped.forEach(o=>noOf[o]=Math.max(1,Math.round(facAll[o]||1)));
-        packFacChain(shipped, noOf, getCrew);
-      } else packFac(expand(lowProds, lowFinals.length?lowFinals:lowProds),'adv',getCrew,null,P4SET);
+      const facAll=consolidate?facBalance(lowFinals.length?lowFinals:advOuts):{};
+      const topLow=Math.max(...lowProds.map(o=>PI.tier[o]));
+      const tgt=planProds.map(Number);
+      const shipped=[...new Set(lowProds.filter(o=>PI.tier[o]===topLow || tgt.includes(o)))];
+      const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
+      packFacChain(shipped, noOf, getCrew); // staged: P2 made & consumed in place, deposit = P1, ships = P3 (consolidate scales counts to the balanced ratio; otherwise one of each)
     } };
   // build a COMPLETE chain (extraction + factory) for one product on one owner's own planets/budget
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
@@ -408,15 +405,14 @@ function colonyPlan(target,sysId){
         if(res.length>60)break; } };
     const ownerGet=()=>({bud:[cpuB,pgB],name:ownerName,id:ownerId});
     const packAdvL=()=>{ const p4=advl.filter(o=>PI.tier[o]>=4), low=advl.filter(o=>PI.tier[o]<4);
-      if(low.length){
-        if(consolidate){ // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
-          const facAll=facBalance([prod]); const topLow=Math.max(...low.map(o=>PI.tier[o]));
-          const shipped=[...new Set(low.filter(o=>PI.tier[o]===topLow || +o===+prod))];
-          const noOf={}; shipped.forEach(o=>noOf[o]=Math.max(1,Math.round(facAll[o]||1)));
-          packFacChain(shipped, noOf, ownerGet); // pushes staged planets straight onto the shared planet list for this owner
-        } else packL(low.slice(),'adv',null,P4SET);
+      if(low.length){ // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
+        const facAll=consolidate?facBalance([prod]):{};
+        const topLow=Math.max(...low.map(o=>PI.tier[o]));
+        const shipped=[...new Set(low.filter(o=>PI.tier[o]===topLow || +o===+prod))];
+        const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
+        packFacChain(shipped, noOf, ownerGet);
       }
-      if(p4.length) packL(p4.slice(),'adv',P4SET); };        // P4 High-Tech plant → Barren/Temperate only (deposit = P3 hauled from this owner's P3 planets)
+      if(p4.length) packP4(consolidate?p4.slice().flatMap(o=>{const n=Math.max(1,Math.round((facBalance([prod])[o])||1));return Array(n).fill(o);}):p4.slice(), ownerGet); }; // P4 High-Tech plant (Barren/Temperate, home-first then adjacent) — deposit = P3 hauled from this owner's P3 planets; same packer as every other role so the staged rule is uniform
     if(buyP1){ packAdvL(); }
     else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,(PI.tier[prod]>=4)?P4SET:null); if(!got) continue;
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p));
@@ -1100,26 +1096,26 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const facRowFor=it=>{ const deps=p1Leaves(it.t).filter(x=>!exOuts.size||exOuts.has(x));
     const depTxt=deps.map(x=>PI.names[x]||x).join(', ')||'<span class="hint">—</span>';
     return `<tr class="facrow" data-fac="${it.t}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(it.p)}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${PI.recipe[it.t]?PI.recipe[it.t].name:(PI.names[it.t]||it.t)} <span class="hint">▸ layout</span></td></tr>`; };
+  const nmF=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
+  const tgt=targets.map(Number);
+  // one row per ACTUAL factory planet (matches the colony layout / candidates) — deposit = what's hauled in, ships = what leaves (on-planet intermediates stay internal, see ▸ layout)
+  const facPlanetRow=p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
+    const imports=(p.ins||[]).filter(x=>!made.includes(+x));
+    const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x}`).join(', ')||'<span class="hint">—</span>';
+    const leaves=made.filter(o=>!made.some(m2=>m2!==o && PI.recipe[m2] && PI.recipe[m2].in.some(([x])=>+x===+o)));
+    const prodList=leaves.length?leaves:made;
+    const prodTxt=prodList.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${tgt.includes(+o)?'':'<span style="color:var(--cyan)" title="intermediate material hauled to another factory">P'+PI.tier[o]+'</span> '}${nmF(o)}`).join(', ');
+    const clickT=leaves.find(o=>tgt.includes(o))??leaves[0]??made[0];
+    const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
+    const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
+    return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; };
+  const facMulti=[...new Set(facAll.map(p=>String(p.whoId)))].length>1;
   let facRows;
-  if(consolidate){ // one row per factory planet (incl. intermediate-only planets from the balanced spread)
-    const nmF=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
-    facRows=facAll.map(p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
-      const imports=(p.ins||[]).filter(x=>!made.includes(+x)); // hauled in: P1 deposits or intermediates from other planets
-      const depTxt=imports.map(x=>`${PI.tier[x]===1?'':'<span style="color:var(--cyan)">P'+PI.tier[x]+'</span> '}${PI.names[x]||x}`).join(', ')||'<span class="hint">—</span>';
-      const tgt=targets.map(Number);
-      // what actually leaves this planet = products made here that no other facility on the SAME planet consumes (finals, or intermediates hauled to a different factory). Internal intermediates stay hidden — see ▸ layout.
-      const leaves=made.filter(o=>!made.some(m2=>m2!==o && PI.recipe[m2] && PI.recipe[m2].in.some(([x])=>+x===+o)));
-      const prodList=leaves.length?leaves:made;
-      const prodTxt=prodList.map(o=>`${p.fcount[o]>1?'<b>'+p.fcount[o]+'×</b> ':''}${tgt.includes(+o)?'':'<span style="color:var(--cyan)" title="intermediate material hauled to another factory">P'+PI.tier[o]+'</span> '}${nmF(o)}`).join(', ');
-      const clickT=leaves.find(o=>tgt.includes(o))??leaves[0]??made[0];
-      const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
-      const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
-      return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; }).join('');
-  } else if(multiFac){ const groups=new Map(); items.forEach(it=>{ const k=String(it.p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(it); });
-    facRows=[...groups.values()].map(g=>{ const who=g[0].p.who||'unassigned'; const role=whoRole[g[0].p.whoId]||'—';
+  if(facMulti){ const groups=new Map(); facAll.forEach(p=>{ const k=String(p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(p); });
+    facRows=[...groups.values()].map(g=>{ const who=g[0].who||'unassigned'; const role=whoRole[g[0].whoId]||'—';
       const hdr=`<tr style="background:rgba(201,168,104,.06)"><td colspan="3" style="padding:5px 10px;color:var(--cyan)"><b>${who}</b> <span class="hint">(${role})</span></td></tr>`;
-      return hdr+g.map(facRowFor).join(''); }).join('');
-  } else { facRows=items.map(facRowFor).join(''); }
+      return hdr+g.map(facPlanetRow).join(''); }).join('');
+  } else { facRows=facAll.map(facPlanetRow).join(''); }
   const hasP4 = plan.planets.some(p=>(p.outs||[]).some(o=>PI.tier[o]>=4));
   const p4banner = hasP4 ? `<div class="hint" style="padding:2px 14px 4px;color:var(--gold-dim)">Only the High-Tech Production Plant (P4 step) must sit on a Barren or Temperate planet; the Advanced Industry Facilities for P1→P2→P3 can be on any planet type.</div>` : '';
   const p4warn = plan.p4overflow ? `<div style="padding:4px 14px;color:var(--amber)">⚠ A P4 product has no free Barren/Temperate planet here — free one up, move P4 to another character, or use a second system.</div>` : '';
