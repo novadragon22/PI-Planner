@@ -989,7 +989,8 @@ function build3DGraph(planet, finals){
   const facById={};
   Object.keys(byTier).map(Number).sort().forEach((tr,ti)=>{ const arr=byTier[tr]; const lat=-4-ti*13;
     arr.forEach((o,i)=>{ const lon=(arr.length===1)?0:(-38+76*i/(arr.length-1)); const isHT=PI.tier[o]>=4;
-      facById[o]=add('f'+o, PI.names[o], isHT?'htech':'adv', lat, lon); }); });
+      const cnt=(planet.fcount&&planet.fcount[o])||1;   // actual number of this facility on the planet → matches the build
+      facById[o]=add('f'+o, (cnt>1?cnt+'× ':'')+PI.names[o], isHT?'htech':'adv', lat, lon); }); });
   // links: power backbone + production routes
   links.push({a:cc,b:lp,kind:'net'}); links.push({a:cc,b:st,kind:'net'}); links.push({a:lp,b:st,kind:'net'});
   outs.forEach(o=>{ const f=facById[o]; const r=PI.recipe[o];
