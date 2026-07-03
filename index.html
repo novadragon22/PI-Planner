@@ -1171,7 +1171,8 @@ function piTemplate(p){
   const made=Object.keys(p.fcount||{}).map(Number);
   const leaves=made.filter(o=>!made.some(m2=>m2!==o&&PI.recipe[m2]&&PI.recipe[m2].in.some(([x])=>+x===+o)));
   const label=(isExtract?('Extract '+(p.outs||[]).map(nm).join('/')):((leaves.length?leaves:made).map(nm).join(', ')));
-  return { CmdCtrLv:Math.max(1,Math.min(5,ccuOverride||5)), Cmt:((p._des||pname)+' — '+label).slice(0,63), Diam:6800.0, Pln:pt.pln, L:links, P:pins, R:routes };
+  const cmt=((p._des||pname)+' - '+label).replace(/[^\x20-\x7E]/g,'-').replace(/-+/g,'-').slice(0,63).trim();
+  return { CmdCtrLv:Math.max(1,Math.min(5,ccuOverride||5)), Cmt:cmt, Diam:6800, L:links, P:pins, Pln:pt.pln, R:routes };
 }
 function buildTemplatesData(){ const plan=_sheetPlan; if(!plan||!plan.planets) return [];
   const nm=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
@@ -1179,28 +1180,33 @@ function buildTemplatesData(){ const plan=_sheetPlan; if(!plan||!plan.planets) r
     const made=Object.keys(p.fcount||{}).map(Number);
     const leaves=made.filter(o=>!made.some(m2=>m2!==o&&PI.recipe[m2]&&PI.recipe[m2].in.some(([x])=>+x===+o)));
     const title=(p._des||(PNAME2[p.pcode]||p.pcode))+' · '+(p.kind==='extract'?('Extract '+(p.outs||[]).map(nm).join('/')):((leaves.length?leaves:made).map(nm).join(', ')));
-    return { idx:i+1, kind:p.kind, title, filename:('PI - '+(p._des||PNAME2[p.pcode]||'planet')+' - '+((leaves.length?leaves:made).map(nm)[0]||'')).replace(/[^A-Za-z0-9 _-]/g,'').trim()+'.json', json:JSON.stringify(piTemplate(p)) };
+    return { idx:i+1, kind:p.kind, title, filename:('PI - '+(p._des||PNAME2[p.pcode]||'planet')+' - '+((leaves.length?leaves:made).map(nm)[0]||'')).replace(/[^A-Za-z0-9 _-]/g,'').trim()+'.json', json:JSON.stringify(piTemplate(p)).replace(/("Diam":)(\d+)([,}])/, '$1$2.0$3') };
   });
 }
 function openBuildSheet(){ const data=buildTemplatesData(); if(!data.length){ alert('Build a plan first — pick target product(s) and a colony system.'); return; }
   let ov=document.getElementById('bsOverlay'); if(ov) ov.remove();
   ov=document.createElement('div'); ov.id='bsOverlay';
   ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(3,5,7,0.97);display:flex;flex-direction:column';
-  const rows=data.map((d,i)=>`<div style="border:1px solid var(--line2);margin:8px 16px;padding:8px 10px">
-      <div style="display:flex;align-items:center;gap:10px"><b style="color:var(--gold-bright)">Planet ${d.idx} — ${d.title}</b>
-        <span style="margin-left:auto;display:flex;gap:6px"><button class="bsC" data-i="${i}" style="cursor:pointer">Copy JSON</button><button class="bsD" data-i="${i}" style="cursor:pointer">Download .json</button></span></div>
-      <textarea id="bsj_${i}" readonly style="width:100%;height:74px;margin-top:6px;font-family:var(--mono,monospace);font-size:10px;background:var(--bg);color:var(--muted);border:1px solid var(--line);resize:vertical">${d.json.replace(/</g,'&lt;')}</textarea></div>`).join('');
+  const dl=(d)=>{ const blob=new Blob([d.json],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=d.filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); };
+  window.__bsDownloadAll=()=>{ data.forEach((d,i)=>setTimeout(()=>dl(d), i*350)); const b=document.getElementById('bsAll'); if(b){ const o=b.textContent; b.textContent='Downloading '+data.length+'…'; setTimeout(()=>b.textContent=o, data.length*350+500); } };
+  const rows=data.map((d,i)=>`<div style="display:flex;align-items:center;gap:10px;border:1px solid var(--line2);margin:6px 16px;padding:7px 10px">
+      <b style="color:var(--gold-bright)">Planet ${d.idx}</b> <span>${d.title}</span>
+      <span class="hint" style="margin-left:auto;font-family:var(--mono);font-size:10px">${d.filename}</span>
+      <button class="bsD" data-i="${i}" style="cursor:pointer;white-space:nowrap">⬇ .json</button></div>`).join('');
   ov.innerHTML=`<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)">
       <b style="color:var(--gold-bright)">Importable colony templates · ${data.length} planet${data.length!==1?'s':''}</b>
-      <span class="hint">EVE native PI template JSON — one per planet</span>
-      <span style="margin-left:auto;display:flex;gap:8px"><button id="bsClose" style="cursor:pointer">Close</button></span></div>
-    <div style="padding:6px 16px 0" class="hint">In game: open the <b>Planets</b> window → a planet → <b>Templates</b> → <b>Import &amp; Export</b> → <b>Load from clipboard</b> (paste a copied JSON), or drop the downloaded .json files into <code>Documents/EVE/&lt;profile&gt;/PlanetaryInteractionTemplates</code> and refresh. CCP auto-switches structures to the planet type; place extractor heads on the deposit yourself.</div>
-    <div style="flex:1;overflow:auto;padding-bottom:16px">${rows}</div>`;
+      <span class="hint">EVE native PI template files — one .json per planet</span>
+      <span style="margin-left:auto;display:flex;gap:8px"><button id="bsAll" style="cursor:pointer;border:1px solid var(--gold-dim);color:var(--gold-bright);padding:4px 12px">⬇ Download all templates</button><button id="bsClose" style="cursor:pointer">Close</button></span></div>
+    <div style="padding:8px 16px 2px" class="hint">1. Click <b>Download all templates</b> (allow multiple downloads if your browser asks).<br>
+      2. Move the .json files into your PI templates folder: <code>Documents/EVE/&lt;profile&gt;/&lt;account&gt;/PlanetaryInteractionTemplates</code> (create it if it isn't there).<br>
+      3. In game: <b>Planets</b> window → any planet → <b>Templates</b> → refresh — your templates appear in the list, ready to place. CCP auto-switches structures to the planet type; you place extractor heads on the deposit yourself.</div>
+    <div style="flex:1;overflow:auto;padding:6px 0 16px">${rows}</div>`;
   document.body.appendChild(ov);
   document.getElementById('bsClose').onclick=()=>ov.remove();
-  ov.querySelectorAll('.bsC').forEach(b=>b.onclick=()=>{ const t=document.getElementById('bsj_'+b.dataset.i); t.select(); try{document.execCommand('copy');}catch(e){} const o=b.textContent; b.textContent='Copied ✓'; setTimeout(()=>b.textContent=o,1200); });
-  ov.querySelectorAll('.bsD').forEach(b=>b.onclick=()=>{ const d=data[+b.dataset.i]; const blob=new Blob([d.json],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=d.filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); });
+  document.getElementById('bsAll').onclick=()=>window.__bsDownloadAll();
+  ov.querySelectorAll('.bsD').forEach(b=>b.onclick=()=>dl(data[+b.dataset.i]));
 }
+
 function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics <span class="hint" style="font-weight:400">· production &amp; transfer routing</span>'; $('closest').innerHTML=''; $('resHead').innerHTML='';
   const sysL = chosen||(baseSuggest[0]&&baseSuggest[0].id)||null;
   if(!target||!sysL){ $('resBody').innerHTML=`<tr><td><div style="display:flex;padding:10px 14px"><span class="hint">Pick target product(s) and a colony system (Candidates → click a system) to see the logistics route.</span><span style="margin-left:auto"><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--cyan)">⭱ Import route</span></span></div></td></tr>`; wireImport('logiImp'); return; }
@@ -1288,7 +1294,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     <span style="margin-left:auto;display:flex;gap:8px"><span id="logiExp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--gold-dim);color:var(--gold-bright)">⭳ Export route</span><span id="logiImp" class="navbtn" style="cursor:pointer;padding:3px 8px;border:1px solid var(--line2);color:var(--muted)">⭱ Import route</span></span></div>${p4banner}${p4out}${p4warn}`;
   const exTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:6px 14px 2px">PRODUCTION · EXTRACTORS</div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Products made</td><td>Crew</td><td>Destination</td></tr>${exRows||'<tr><td colspan="4" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
-  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px;display:flex;align-items:center;gap:8px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · ×qty = units for your basket amounts · click a ${consolidate?'planet':'product'} for its build layout</span><span id="bldSheet" class="navbtn" style="margin-left:auto;cursor:pointer;padding:2px 9px;border:1px solid var(--gold-dim);color:var(--gold-bright);white-space:nowrap" title="Generate importable EVE PI colony templates (native .json) — one per planet: facilities, launchpad, links and routes. CCP auto-switches structures to the planet; place extractor heads yourself.">⎘ colony templates</span></div>
+  const facTbl=`<div class="mono" style="font-size:10px;letter-spacing:.1em;color:var(--gold);padding:10px 14px 2px;display:flex;align-items:center;gap:8px">PRODUCTION · FACTORY <span class="hint" style="font-weight:400">· ${facAll.length} planet${facAll.length!==1?'s':''} · ${facTotalCnt} facilit${facTotalCnt!==1?'ies':'y'} (throughput-balanced) · ×qty = units for your basket amounts · click a ${consolidate?'planet':'product'} for its build layout</span><span id="bldSheet" class="navbtn" style="margin-left:auto;cursor:pointer;padding:2px 9px;border:1px solid var(--gold-dim);color:var(--gold-bright);white-space:nowrap" title="Download importable EVE PI colony template files (native .json) — one per planet. Drop them in your PlanetaryInteractionTemplates folder and refresh the in-game template list.">⎘ colony templates</span></div>
     <table class="mono" style="font-size:11px;width:100%;border-collapse:collapse"><tr class="hint"><td style="padding:4px 10px">Planet</td><td>Deposit required</td><td>Ships out</td></tr>${facRows||'<tr><td colspan="3" class="hint" style="padding:6px 10px">none</td></tr>'}</table>`;
   // ----- drill-down: full build layout for one final product -----
   const layoutHtml=T=>{ const nm=t=>PI.recipe[t]?PI.recipe[t].name:(PI.names[t]||t);
