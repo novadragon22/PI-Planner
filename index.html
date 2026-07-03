@@ -266,6 +266,26 @@ function facBalance(finals){ const need={}; (finals||[]).forEach(F=>{ const loc=
     chainTiers(F).slice().sort((a,b)=>PI.tier[b]-PI.tier[a]).forEach(X=>{ const r=PI.recipe[X]; if(!r||!loc[X])return; const cph=3600/r.ct;
       r.in.forEach(([I,q])=>{ const ri=PI.recipe[I]; if(ri){ const rate=ri.out*3600/ri.ct; loc[I]=(loc[I]||0)+loc[X]*q*cph/rate; } }); });
     Object.keys(loc).forEach(k=>need[k]=(need[k]||0)+loc[k]); }); return need; }
+// minimal staged factory unit (one top-low product + its immediate lower-tier feeders + launchpad + storage) — used to decide if low Command Center Upgrades force single-tier factories
+function minStagedUnit(){
+  const planProds=(allProducts&&Object.keys(sel).length)?Object.keys(sel).map(Number):[target].filter(Boolean);
+  const low=new Set(); planProds.forEach(t=>chainTiers(t).forEach(o=>{ if(PI.tier[o]>=2&&PI.tier[o]<4) low.add(+o); }));
+  if(!low.size) return {cpu:0,pg:0};
+  const topLow=Math.max(...[...low].map(o=>PI.tier[o]));
+  let cpu=0,pg=0;
+  [...low].filter(o=>PI.tier[o]===topLow).forEach(o=>{ const b=facBalance([o]); let facs=0;
+    Object.keys(b).forEach(p=>{ if(PI.tier[p]>=2&&PI.tier[p]<=topLow) facs+=Math.max(1,Math.round(b[p])); }); // one self-sufficient staged line: the P3 + enough P2 facilities to feed it (balanced by cycle time)
+    cpu=Math.max(cpu, FAC.launch.cpu+FAC.store.cpu+facs*FAC.adv.cpu); pg=Math.max(pg, FAC.launch.pg+FAC.store.pg+facs*FAC.adv.pg); });
+  return {cpu,pg};
+}
+function factorySkillsBlockStaged(){
+  const ids=Object.keys(chars).filter(id=>charRole[id]==='factory');
+  if(!ids.length) return false;
+  const u=minStagedUnit(); if(!u.cpu) return false;
+  // staged is impractical for a Factory pilot whose Command Center Upgrades can't fit a self-sufficient staged line,
+  // or is too low (≤2) to consolidate several lines onto one planet (staged's whole advantage). Then single-tier is the sensible build.
+  return ids.some(id=>{ const ccu=(charSkills[id]&&charSkills[id].ccu)||0; const b=CCU_BUDGET[Math.max(0,Math.min(5,ccu))]||CCU_BUDGET[0]; return u.cpu>b[0]||u.pg>b[1]||ccu<=2; });
+}
 function colonyPlan(target,sysId){
   const have=SYS[sysId][5];
   // products this colony builds: the focus target, or the whole basket when 'all products' is toggled
@@ -393,12 +413,18 @@ function colonyPlan(target,sysId){
     const lowFinals=planProds.map(Number).filter(t=>PI.tier[t]>=2);
     if(p4prods.length) packP4(expand(p4prods, p4Finals.length?p4Finals:p4prods), getCrew);                 // High-Tech plants → Barren/Temperate only (with adjacent-system overflow)
     if(lowProds.length){
-      const facAll=consolidate?facBalance(lowFinals.length?lowFinals:advOuts):{};
-      const topLow=Math.max(...lowProds.map(o=>PI.tier[o]));
-      const tgt=planProds.map(Number);
-      const shipped=[...new Set(lowProds.filter(o=>PI.tier[o]===topLow || tgt.includes(o)))];
-      const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
-      packFacChain(shipped, noOf, getCrew); // staged: P2 made & consumed in place, deposit = P1, ships = P3 (consolidate scales counts to the balanced ratio; otherwise one of each)
+      if(singleTierFac){
+        // single-tier factory colonies (DalShooth style): each planet makes ONE tier and imports the tier below. Deposit = tier-1, ships = that tier.
+        const byT={}; lowProds.forEach(o=>{ (byT[PI.tier[o]]=byT[PI.tier[o]]||[]).push(o); });
+        Object.keys(byT).map(Number).sort((a,b)=>b-a).forEach(t=> packFac(expand(byT[t], lowFinals.length?lowFinals:lowProds),'adv',getCrew,null,P4SET));
+      } else {
+        const facAll=consolidate?facBalance(lowFinals.length?lowFinals:advOuts):{};
+        const topLow=Math.max(...lowProds.map(o=>PI.tier[o]));
+        const tgt=planProds.map(Number);
+        const shipped=[...new Set(lowProds.filter(o=>PI.tier[o]===topLow || tgt.includes(o)))];
+        const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
+        packFacChain(shipped, noOf, getCrew); // staged: P2 made & consumed in place, deposit = P1, ships = P3 (consolidate scales counts to the balanced ratio; otherwise one of each)
+      }
     } };
   // build a COMPLETE chain (extraction + factory) for one product on one owner's own planets/budget
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
@@ -412,12 +438,16 @@ function colonyPlan(target,sysId){
         if(res.length>60)break; } };
     const ownerGet=()=>({bud:[cpuB,pgB],name:ownerName,id:ownerId});
     const packAdvL=()=>{ const p4=advl.filter(o=>PI.tier[o]>=4), low=advl.filter(o=>PI.tier[o]<4);
-      if(low.length){ // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
-        const facAll=consolidate?facBalance([prod]):{};
-        const topLow=Math.max(...low.map(o=>PI.tier[o]));
-        const shipped=[...new Set(low.filter(o=>PI.tier[o]===topLow || +o===+prod))];
-        const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
-        packFacChain(shipped, noOf, ownerGet);
+      if(low.length){
+        if(singleTierFac){ const byT={}; low.forEach(o=>{ (byT[PI.tier[o]]=byT[PI.tier[o]]||[]).push(o); });
+          Object.keys(byT).map(Number).sort((a,b)=>b-a).forEach(t=> packL(byT[t].slice(),'adv',null,P4SET)); }
+        else { // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
+          const facAll=consolidate?facBalance([prod]):{};
+          const topLow=Math.max(...low.map(o=>PI.tier[o]));
+          const shipped=[...new Set(low.filter(o=>PI.tier[o]===topLow || +o===+prod))];
+          const noOf={}; shipped.forEach(o=>noOf[o]=consolidate?Math.max(1,Math.round(facAll[o]||1)):1);
+          packFacChain(shipped, noOf, ownerGet);
+        }
       }
       if(p4.length) packP4(consolidate?p4.slice().flatMap(o=>{const n=Math.max(1,Math.round((facBalance([prod])[o])||1));return Array(n).fill(o);}):p4.slice(), ownerGet); }; // P4 High-Tech plant (Barren/Temperate, home-first then adjacent) — deposit = P3 hauled from this owner's P3 planets; same packer as every other role so the staged rule is uniform
     if(buyP1||buyP3){ packAdvL(); }
@@ -633,6 +663,7 @@ let buyHub=+(localStorage.getItem('pi_hub')||60003760);
 let buyP0=localStorage.getItem('pi_bp0')==='1';
 let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
 let buyP3=localStorage.getItem('pi_bp3')==='1'; // import P3 — build only the P3→P4 High-Tech plants
+let singleTierFac=localStorage.getItem('pi_st1')==='1'; // single-tier factory colonies (import the tier below) — offered when Factory-role skills can't fit a staged unit
 // market fees: sales tax (Accounting) + broker fee (Broker Relations) + station-owner standings
 let sellMode=localStorage.getItem('pi_sellmode')||'buy'; // 'buy' = sell to buy orders (tax only); 'sell' = list on sell orders (tax + broker)
 let charStandings={}; // charId -> { fromId: standing } (unmodified standings, used for broker fee)
@@ -723,7 +754,8 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
     <div style="display:flex;gap:16px;margin:4px 0 6px;flex-wrap:wrap" class="hint">
       <label style="cursor:pointer"><input type="checkbox" id="cbP0" ${buyP0?'checked':''}> Buy P0 (raw)</label>
       <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label>
-      <label style="cursor:pointer" title="Import P3 and build only the P3 → P4 High-Tech plants — no extraction, no P1/P2/P3 factories."><input type="checkbox" id="cbP3" ${buyP3?'checked':''}> Import P3 (P3→P4 only)</label></div>
+      <label style="cursor:pointer" title="Import P3 and build only the P3 → P4 High-Tech plants — no extraction, no P1/P2/P3 factories."><input type="checkbox" id="cbP3" ${buyP3?'checked':''}> Import P3 (P3→P4 only)</label>
+      ${factorySkillsBlockStaged()?`<label style="cursor:pointer;color:var(--amber)" title="A Factory-role pilot's Command Center Upgrades budget is too low to fit a staged unit (P2 made beside the P3). Single-tier puts each tier on its own planet — the P3 planet imports P2, the P2 planet imports P1 — matching the community template style."><input type="checkbox" id="cbST1" ${singleTierFac?'checked':''}> Single-tier factories <span class="hint">(skills)</span></label>`:''}</div>
     <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:8px 0 3px">WEEKLY PROFIT / LOSS · WHOLE BASKET</div>
     ${feeCtl}
     <table class="mono" style="font-size:11px;border-collapse:collapse;width:100%">
@@ -745,6 +777,7 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
   $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
   { const el=$('cbP3'); if(el) el.onchange=e=>{ buyP3=e.target.checked; localStorage.setItem('pi_bp3',buyP3?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); }; }
+  { const el=$('cbST1'); if(el) el.onchange=e=>{ singleTierFac=e.target.checked; localStorage.setItem('pi_st1',singleTierFac?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); }; }
   box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
     const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
     try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
@@ -1091,35 +1124,54 @@ const PITYPE={
 function piTemplate(p){
   const pname=(PNAME2[p.pcode]&&PITYPE[PNAME2[p.pcode]])?PNAME2[p.pcode]:'Barren';
   const pt=PITYPE[pname];
-  const LAT0=1.5, LON0=1.5;
-  const pins=[], links=[], routes=[];
-  pins.push({H:0,La:LAT0,Lo:LON0,S:null,T:pt.lp}); const hub=1;   // launchpad = hub (Command Center is implied by CmdCtrLv)
+  const isExtract=(p.kind==='extract');
+  const LAT0=1.115, LON0=1.505;
+  const pins=[], meta=[], rings=[0];
+  pins.push({H:0,La:LAT0,Lo:LON0,S:null,T:isExtract?pt.st:pt.lp}); meta.push({role:'hub'});   // hub: Storage for miners (buffers the big P0 burst), Launchpad for factories. Command Center implied by CmdCtrLv.
   let placed=0;
-  const nextPos=()=>{ let n=placed, ring=1, cap=6; while(n>=cap){ n-=cap; ring++; cap+=6; } const ang=(n/(ring*6))*2*Math.PI, r=0.045*ring; placed++; return [LAT0+r*Math.cos(ang), LON0+r*Math.sin(ang)]; };
-  const addPin=(T,S,H)=>{ const [la,lo]=nextPos(); pins.push({H:H||0,La:+la.toFixed(5),Lo:+lo.toFixed(5),S:(S==null?null:+S),T}); const idx=pins.length; links.push({D:idx,Lv:0,S:hub}); return idx; };
-  const made=Object.keys(p.fcount||{}).map(Number);
-  if(p.kind==='extract'){
+  const nextPos=()=>{ let n=placed, ring=1, cap=6; while(n>=cap){ n-=cap; ring++; cap=6*ring; } const ang=(n/(6*ring))*2*Math.PI + ring*0.5; const r=0.022*ring; placed++; return [LAT0+r*Math.cos(ang), LON0+r*Math.sin(ang), ring]; };
+  const addPin=(T,S,H,info)=>{ const [la,lo,ring]=nextPos(); pins.push({H:H||0,La:+la.toFixed(5),Lo:+lo.toFixed(5),S:(S==null?null:+S),T}); meta.push(info); rings.push(ring); return pins.length-1; }; // returns 0-based index
+  let lpIdx=null; const ecuList=[], facIdx=[], basicIdx=[];
+  if(isExtract){
+    lpIdx=addPin(pt.lp,null,0,{role:'lp'});                                   // Launchpad leaf = export point (linked to Storage)
     const p1=(p.outs||[])[0]; const basics=p1?(p.fcount[p1]||0):0;
     const p0=p1&&PI.recipe[p1]?PI.recipe[p1].in.map(([x])=>+x).find(x=>PI.tier[x]===0):null;
     const heads=+((/·\s*(\d+)\s*head/.exec(p.fac)||[])[1]||0);
-    if(p0!=null){ const ecu=addPin(pt.ecu,p0,heads);
-      const p0perBasic=(PI.recipe[p1].in.find(([x])=>+x===+p0)||[0,3000])[1];
-      routes.push({P:[ecu,hub],Q:Math.max(1,basics)*p0perBasic,T:+p0}); }        // extracted P0 -> hub (heads placed on the deposit in-game)
-    for(let i=0;i<basics;i++){ const f=addPin(pt.basic,p1,0);
-      PI.recipe[p1].in.forEach(([ik,qk])=>routes.push({P:[hub,f],Q:qk,T:+ik}));    // P0 in
-      routes.push({P:[f,hub],Q:PI.recipe[p1].out,T:+p1}); }                        // P1 out
+    const ecus=Math.max(1,+((/(\d+)×\s*Extractor Control Unit/.exec(p.fac)||[])[1]||1));
+    if(p0!=null){ for(let e=0;e<ecus;e++){ const hh=Math.floor(heads/ecus)+(e<heads%ecus?1:0); ecuList.push(addPin(pt.ecu,p0,hh,{role:'ecu',o:+p0,p1:+p1,heads:hh})); } } // one pin per ECU (heads split) — EVE caps heads per ECU
+    for(let i=0;i<basics;i++) basicIdx.push(addPin(pt.basic,p1,0,{role:'basic',o:+p1}));
   } else {
-    made.sort((a,b)=>PI.tier[a]-PI.tier[b]);
+    const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[a]-PI.tier[b]);
     made.forEach(o=>{ const isHT=PI.tier[o]>=4; const T=isHT?(pt.htech||PITYPE.Barren.htech):pt.adv;
-      for(let i=0;i<(p.fcount[o]||0);i++){ const f=addPin(T,o,0);
-        PI.recipe[o].in.forEach(([ik,qk])=>routes.push({P:[hub,f],Q:qk,T:+ik}));   // inputs from hub (deposits or on-planet intermediates buffered on the launchpad)
-        routes.push({P:[f,hub],Q:PI.recipe[o].out,T:+o}); }                        // output to hub
-    });
+      for(let i=0;i<(p.fcount[o]||0);i++) facIdx.push(addPin(T,o,0,{role:'fac',o:+o})); });
+  }
+  const N=pins.length;
+  // bushy spanning tree rooted at the hub (index 0): ring 1 → hub, ring k → nearest ring k-1. Short links + shallow paths.
+  const d2=(a,b)=>{ const x=pins[a].La-pins[b].La, y=pins[a].Lo-pins[b].Lo; return x*x+y*y; };
+  const parent=new Array(N).fill(-1);
+  for(let i=1;i<N;i++){ if(rings[i]<=1){ parent[i]=0; continue; }
+    let bj=-1,bd=Infinity; for(let j=1;j<N;j++){ if(rings[j]===rings[i]-1){ const d=d2(i,j); if(d<bd){ bd=d; bj=j; } } }
+    parent[i]= bj>=0?bj:0; }
+  const links=[]; for(let i=1;i<N;i++) links.push({D:i+1,Lv:0,S:parent[i]+1});
+  const up=i=>{ const path=[]; let c=i; while(c!==-1){ path.push(c+1); c=parent[c]; } return path; };   // [i.. hub] 1-indexed
+  const routes=[];
+  if(isExtract){
+    const p1=(p.outs||[])[0];
+    const p0=ecuList.length?meta[ecuList[0]].o:null;
+    ecuList.forEach(ei=>routes.push({P:up(ei),Q:Math.max(3000,(meta[ei].heads||10)*29000),T:p0}));   // each ECU → Storage (P0), generous like the reference templates so extraction never bottlenecks
+    basicIdx.forEach(bi=>{ const U=up(bi), D=U.slice().reverse();
+      routes.push({P:D,Q:3000,T:p0});                                          // Storage → basic (P0)
+      routes.push({P:U.concat([lpIdx+1]),Q:PI.recipe[p1].out,T:+p1}); });       // basic → Storage → Launchpad (P1)
+  } else {
+    facIdx.forEach(i=>{ const m=meta[i], r=PI.recipe[m.o]; if(!r) return; const U=up(i), D=U.slice().reverse();
+      r.in.forEach(([ik,qk])=>routes.push({P:D,Q:qk,T:+ik}));                   // inputs hub → facility
+      routes.push({P:U,Q:r.out,T:+m.o}); });                                    // output facility → hub
   }
   const nm=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
+  const made=Object.keys(p.fcount||{}).map(Number);
   const leaves=made.filter(o=>!made.some(m2=>m2!==o&&PI.recipe[m2]&&PI.recipe[m2].in.some(([x])=>+x===+o)));
-  const label=(p.kind==='extract'?('Extract '+(p.outs||[]).map(nm).join('/')):((leaves.length?leaves:made).map(nm).join(', ')));
-  return { CmdCtrLv:Math.max(1,Math.min(5,ccuOverride||5)), Cmt:((p._des||pname)+' — '+label).slice(0,63), Diam:12000.0, Pln:pt.pln, L:links, P:pins, R:routes };
+  const label=(isExtract?('Extract '+(p.outs||[]).map(nm).join('/')):((leaves.length?leaves:made).map(nm).join(', ')));
+  return { CmdCtrLv:Math.max(1,Math.min(5,ccuOverride||5)), Cmt:((p._des||pname)+' — '+label).slice(0,63), Diam:6800.0, Pln:pt.pln, L:links, P:pins, R:routes };
 }
 function buildTemplatesData(){ const plan=_sheetPlan; if(!plan||!plan.planets) return [];
   const nm=o=>PI.recipe[o]?PI.recipe[o].name:(PI.names[o]||o);
