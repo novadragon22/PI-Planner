@@ -271,9 +271,16 @@ function colonyPlan(target,sysId){
   // products this colony builds: the focus target, or the whole basket when 'all products' is toggled
   const planProds = (allProducts && Object.keys(sel).length) ? Object.keys(sel) : [String(target)];
   const _p0=new Set(), _p1=new Set(), _adv=new Set();
-  planProds.forEach(t=>{ p0NeedsFor(t).forEach(p=>_p0.add(p)); chainTiers(t).forEach(o=>{ if(PI.tier[o]==1)_p1.add(o); else if(PI.tier[o]>=2)_adv.add(o); }); });
+  planProds.forEach(t=>{ if(!buyP3) p0NeedsFor(t).forEach(p=>_p0.add(p)); chainTiers(t).forEach(o=>{ const tr=PI.tier[o]; if(buyP3){ if(tr>=4)_adv.add(o); } else if(tr==1)_p1.add(o); else if(tr>=2)_adv.add(o); }); });
   const p0=[..._p0]; const p1Outs=[..._p1]; const advOuts=[..._adv];
   const finalSet=new Set(planProds.map(Number));   // the targeted final products (each gets its own Storage Facility when sharing a planet, budget permitting)
+  // extraction yield estimate from Planetology (2406) + Advanced Planetology (2403): higher survey accuracy → heads on richer deposits. Shown on extractor planets when the owner's skills are known.
+  const extYield=id=>{ let pl,ap; const cs=charSkills[id];
+    if(cs&&cs.pi){ pl=cs.pi[2406]||0; ap=cs.pi[2403]||0; }
+    else if(typeof skillMap!=='undefined' && (skillMap[2406]!=null||skillMap[2403]!=null)){ pl=skillMap[2406]||0; ap=skillMap[2403]||0; }
+    else return '';
+    const mult=1+0.05*pl+0.05*ap;
+    return `<br><span style="color:var(--muted)" title="Planetology + Advanced Planetology raise extraction survey accuracy, letting heads sit on richer deposits. Rough yield estimate vs untrained — calibrate to your in-game survey scan.">≈ ×${mult.toFixed(2)} yield est · Planetology ${pl} / Adv ${ap}</span>`; };
   const [cpuB0,pgB0]=CCU_BUDGET[ccuOverride];   // fallback budget (single-char / overflow)
   // crew: role-based assignment kicks in with 2+ logged-in characters
   const ids=Object.keys(chars);
@@ -395,7 +402,7 @@ function colonyPlan(target,sysId){
     } };
   // build a COMPLETE chain (extraction + factory) for one product on one owner's own planets/budget
   const chainPlanets=(prod,cpuB,pgB,ownerName,ownerId)=>{ const res=[];
-    const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=2);
+    const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=(buyP3?4:2));
     const packL=(rem,kind,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic, fname=kind==='adv'?'Advanced':'Basic', sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
       while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; else facOver++; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
         while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB&&pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
@@ -413,7 +420,7 @@ function colonyPlan(target,sysId){
         packFacChain(shipped, noOf, ownerGet);
       }
       if(p4.length) packP4(consolidate?p4.slice().flatMap(o=>{const n=Math.max(1,Math.round((facBalance([prod])[o])||1));return Array(n).fill(o);}):p4.slice(), ownerGet); }; // P4 High-Tech plant (Barren/Temperate, home-first then adjacent) — deposit = P3 hauled from this owner's P3 planets; same packer as every other role so the staged rule is uniform
-    if(buyP1){ packAdvL(); }
+    if(buyP1||buyP3){ packAdvL(); }
     else { for(const p of p0l){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]); const got=claim(ownerId,codes,(PI.tier[prod]>=4)?P4SET:null); if(!got) continue;
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p));
         let cpu=FAC.launch.cpu,pg=FAC.launch.pg,ecus=0,heads=0,basics=0;
@@ -421,13 +428,16 @@ function colonyPlan(target,sysId){
         const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
         addECU(); while(addBasic()){}
         if(basics===0) continue;
-        res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fcount:p1?{[p1]:basics}:{},fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
+        res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fcount:p1?{[p1]:basics}:{},fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad${extYield(ownerId)}`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       packAdvL(); }
     return res; };
   let mode, note;
   // shared focus-product plan (extractor + factory crew). Skip in role mode if nobody is extract/factory.
   const buildShared = !roleMode || extractors.length || factories.length;
-  if(buyP1){ mode='buyP1';
+  if(buyP3){ mode='buyP3';
+    note='Importing P3 — no extraction and no P1/P2/P3 factories. Planets only run High-Tech plants (P3 → P4); the P3 inputs (and any direct lower-tier inputs) are bought and deposited at the plant.';
+    if(buildShared) packAdv(nextFactory);
+  } else if(buyP1){ mode='buyP1';
     note='Buying all P1 — no extraction or basic facilities. Planets only run Advanced Industry Facilities on imported P1, so any planet type works.';
     if(buildShared) packAdv(nextFactory);
   } else { mode='extract';
@@ -455,7 +465,7 @@ function colonyPlan(target,sysId){
         if(basics===0){ if(!placedAny) unassigned.push(p); else { overflow=true; extOver += (want!=null?Math.max(1,Math.ceil(want/lastBasics)):1); } break; }
         lastBasics=basics; const fb={}; if(p1) fb[p1]=basics;
         planets.push({title:`${PNAME2[got.code]}`, sub:'Extraction + P1', who:cw.name, whoId:cw.id, sys:sysId, kind:'extract', pcode:got.code, ci:got.ci, outs:p1?[+p1]:[], ins:[], fcount:fb,
-          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
+          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad${extYield(cw.id)}`,
           cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); placedAny=true;
         if(want==null) break; want-=basics; if(want<=0) break; if(planets.length>60) break; } }
       packAdv(nextFactory); }
@@ -480,7 +490,7 @@ function colonyPlan(target,sysId){
         const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
         addECU(); while(addBasic()){}
         planets.push({title:`${PNAME2[pick]} · ${SYS[fsug.id][0]} (feeder)`, sub:`Feeder colony — ${SYS[fsug.id][0]} · ${fsug.jumps} jump${fsug.jumps!==1?'s':''} from main`, who:cw.name, whoId:cw.id, feeder:true, sys:fsug.id, kind:'feeder', pcode:pick, outs:p1?[+p1]:[], ins:[], fcount:p1?{[p1]:basics}:{},
-          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad`,
+          fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad${extYield(cw.id)}`,
           cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
       unassigned.length=0; still.forEach(p=>unassigned.push(p));
       feederInfo={id:fsug.id, jumps:fsug.jumps, owners:[...feederOwners].map(i=>{const c=crew.find(x=>String(x.id)===String(i));return c?c.name:null;}).filter(Boolean)}; }
@@ -622,6 +632,7 @@ function saveSettings(){ cfg.tier=tier; cfg.secf=secFilter; cfg.whole=whole?1:0;
 let buyHub=+(localStorage.getItem('pi_hub')||60003760);
 let buyP0=localStorage.getItem('pi_bp0')==='1';
 let buyP1=localStorage.getItem('pi_bp1')!=='0'; // default on
+let buyP3=localStorage.getItem('pi_bp3')==='1'; // import P3 — build only the P3→P4 High-Tech plants
 // market fees: sales tax (Accounting) + broker fee (Broker Relations) + station-owner standings
 let sellMode=localStorage.getItem('pi_sellmode')||'buy'; // 'buy' = sell to buy orders (tax only); 'sell' = list on sell orders (tax + broker)
 let charStandings={}; // charId -> { fromId: standing } (unmodified standings, used for broker fee)
@@ -662,13 +673,15 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   const agg={}; pids.forEach(pid=>{ const c=bom(pid,Math.max(1,sel[pid]||1)); for(const t in c) agg[t]=(agg[t]||0)+c[t]; });
   const p0items=Object.keys(agg).filter(t=>PI.p0pt[t]).map(t=>[t,Math.ceil(agg[t])]).filter(x=>x[1]>0).sort(byName);
   const p1items=Object.keys(agg).filter(t=>PI.tier[t]===1).map(t=>[t,Math.ceil(agg[t])]).filter(x=>x[1]>0).sort(byName);
+  const p3items=Object.keys(agg).filter(t=>PI.tier[t]===3).map(t=>[t,Math.ceil(agg[t])]).filter(x=>x[1]>0).sort(byName);
   // weekly revenue: sell finished products to buy orders at chosen hub
   let revenue=0, revPriced=true;
   pids.forEach(pid=>{ const p=px(buyHub,pid); if(p) revenue+=Math.max(1,sel[pid])*p.buy; else revPriced=false; });
   const fees=feeRates(); const netRev=revenue*(1-fees.total);
-  const c0=listCost(p0items,buyHub), c1=listCost(p1items,buyHub);
+  const c0=listCost(p0items,buyHub), c1=listCost(p1items,buyHub), c3=listCost(p3items,buyHub);
   const c0ok=p0items.length>0&&p0items.every(([t])=>px(buyHub,t));
   const c1ok=p1items.length>0&&p1items.every(([t])=>px(buyHub,t));
+  const c3ok=p3items.length>0&&p3items.every(([t])=>px(buyHub,t));
   const feeSrc = fees.who?`from <b style="color:var(--cyan-bright)">${fees.who}</b> (best trader · Acct ${fees.acc} / Broker ${fees.br})`:`base rates (no character logged in)`;
   const feeCtl=`<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0 2px" class="hint">
       <span style="display:flex;align-items:center;gap:5px">Sell via <select id="sellMode" style="width:auto"><option value="buy" ${sellMode==='buy'?'selected':''}>Buy orders (instant)</option><option value="sell" ${sellMode==='sell'?'selected':''}>Sell orders (listed)</option></select></span></div>
@@ -707,18 +720,20 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
       <span class="hint">${pricesErr?`<span style="color:var(--amber)">price issue · </span>`:''}<span id="reloadPx" style="cursor:pointer;color:var(--cyan)">↻ reload</span></span></div>
     <div style="margin-bottom:6px">${basket}
       <div class="hint" style="margin-top:4px"><span id="clrSel" style="cursor:pointer;color:var(--muted)">clear basket</span></div></div>
-    <div style="display:flex;gap:16px;margin:4px 0 6px" class="hint">
+    <div style="display:flex;gap:16px;margin:4px 0 6px;flex-wrap:wrap" class="hint">
       <label style="cursor:pointer"><input type="checkbox" id="cbP0" ${buyP0?'checked':''}> Buy P0 (raw)</label>
-      <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label></div>
+      <label style="cursor:pointer"><input type="checkbox" id="cbP1" ${buyP1?'checked':''}> Buy P1 (processed)</label>
+      <label style="cursor:pointer" title="Import P3 and build only the P3 → P4 High-Tech plants — no extraction, no P1/P2/P3 factories."><input type="checkbox" id="cbP3" ${buyP3?'checked':''}> Import P3 (P3→P4 only)</label></div>
     <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:8px 0 3px">WEEKLY PROFIT / LOSS · WHOLE BASKET</div>
     ${feeCtl}
     <table class="mono" style="font-size:11px;border-collapse:collapse;width:100%">
       <tr class="hint"><td style="padding-right:8px">strategy</td><td style="text-align:right">inputs</td><td style="text-align:right">net revenue</td><td style="text-align:right">profit</td></tr>
-      ${pl('Self-extract',0,true,!buyP0&&!buyP1)}${pl('Buy P0',c0,c0ok,buyP0&&!buyP1)}${pl('Buy P1',c1,c1ok,buyP1)}</table>
+      ${pl('Self-extract',0,true,!buyP0&&!buyP1&&!buyP3)}${pl('Buy P0',c0,c0ok,buyP0&&!buyP1&&!buyP3)}${pl('Buy P1',c1,c1ok,buyP1&&!buyP3)}${buyP3?pl('Import P3',c3,c3ok,true):''}</table>
     <div class="hint" style="margin:3px 0 6px;color:var(--muted2)">Net revenue = sell finished goods at ${hubName(buyHub)} less market fees above; excludes build time / POCO tax.</div>
-    ${buyP0?sec('P0 shopping list',p0items,'p0',c0,c0ok):''}
-    ${buyP1?sec('P1 shopping list',p1items,'p1',c1,c1ok):''}
-    ${!buyP0&&!buyP1?'<div class="hint" style="color:var(--muted2)">Tick Buy P0 or Buy P1 for a copy-paste EVE multibuy list.</div>':''}
+    ${buyP3?sec('P3 shopping list',p3items,'p3',c3,c3ok):''}
+    ${!buyP3&&buyP0?sec('P0 shopping list',p0items,'p0',c0,c0ok):''}
+    ${!buyP3&&buyP1?sec('P1 shopping list',p1items,'p1',c1,c1ok):''}
+    ${!buyP0&&!buyP1&&!buyP3?'<div class="hint" style="color:var(--muted2)">Tick Buy P0, Buy P1, or Import P3 for a copy-paste EVE multibuy list.</div>':''}
     <div style="font-size:10px;color:var(--gold);font-family:var(--mono);letter-spacing:.12em;margin:12px 0 3px">BASKET VALUE BY HUB (sell-to-buy)</div>
     <table class="mono" style="font-size:11px;border-collapse:collapse">${hubcmp}</table>`;
   $('hubSel').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderProcure(); };
@@ -729,6 +744,7 @@ function renderProcure(){ const box=$('procure'); if(!box) return;
   box.querySelectorAll('.prm').forEach(x=>x.onclick=()=>toggleProduct(x.dataset.o));
   $('cbP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
   $('cbP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); };
+  { const el=$('cbP3'); if(el) el.onchange=e=>{ buyP3=e.target.checked; localStorage.setItem('pi_bp3',buyP3?'1':'0'); renderProcure(); if(viewing==='colony'&&chosen&&target) renderColony(); else if(viewing==='make') renderMake(); }; }
   box.querySelectorAll('.mbcopy').forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const ta=$('mb_'+k);
     const done=()=>{ const o=$('mbok_'+k); if(o){ o.textContent='copied ✓'; setTimeout(()=>o.textContent='',1500); } };
     try{ navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();}); }
@@ -1103,6 +1119,21 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
   const facTotById={}; facAll.forEach(q=>Object.entries(q.fcount||{}).forEach(([o,n])=>{ facTotById[o]=(facTotById[o]||0)+n; }));
   const qfmt=n=>{ n=Math.round(n); return n>=1000?n.toLocaleString():String(n); };
   const unitsOnP=(p,o)=>{ const F=facTotById[o]||0; const tot=basketBom[o]||0; return F?tot*((p.fcount[o]||0)/F):tot; };
+  // buffer / haul cadence: how long a planet's Launchpad (10,000 m³) + Storage Facilities (12,000 m³ each) run before output overflows storage or deposited inputs run dry — from facility throughput, independent of basket size
+  const VOLm={0:0.01,1:0.38,2:1.5,3:6,4:100};
+  const storesOf=p=>{ const m=/(\d+)×\s*Storage Facility/.exec(p.fac||''); return m?+m[1]:0; };
+  const rUnits=(p,o)=>{ const r=PI.recipe[o]; return r?(p.fcount[o]||0)*(3600/(r.ct||3600))*(r.out||1):0; };
+  const bufferTxt=p=>{ const made=Object.keys(p.fcount||{}).map(Number);
+    const leaves=made.filter(o=>!made.some(m2=>m2!==o && PI.recipe[m2] && PI.recipe[m2].in.some(([x])=>+x===+o)));
+    let outVol=0; leaves.forEach(o=>outVol+=rUnits(p,o)*(VOLm[PI.tier[o]]||0.01));
+    const depd={}; made.forEach(o=>{ const r=PI.recipe[o]; if(!r) return; const u=rUnits(p,o); r.in.forEach(([d,q])=>{ d=+d; if(!made.includes(d)) depd[d]=(depd[d]||0)+u*(q/(r.out||1)); }); });
+    let inVol=0; Object.keys(depd).forEach(d=>inVol+=depd[d]*(VOLm[PI.tier[d]]||0.01));
+    const cap=10000+storesOf(p)*12000;
+    const fill=outVol>0?cap/outVol:Infinity, drain=inVol>0?10000/inVol:Infinity, h=Math.min(fill,drain);
+    if(!isFinite(h)) return '';
+    const ht=h>=48?Math.round(h/24)+'d':h>=1?Math.round(h)+'h':Math.round(h*60)+'m';
+    const ft=isFinite(fill)?(fill>=48?Math.round(fill/24)+'d':Math.round(fill)+'h'):'—', dt=isFinite(drain)?(drain>=48?Math.round(drain/24)+'d':Math.round(drain)+'h'):'—';
+    return ` <span class="hint" title="Haul cadence at full production: output fills this planet's storage in ${ft}; a full Launchpad of deposited inputs lasts ${dt}. Visit before the shorter of the two.">· buffer ~${ht}</span>`; };
   // one row per ACTUAL factory planet (matches the colony layout / candidates) — deposit = what's hauled in, ships = what leaves (on-planet intermediates stay internal, see ▸ layout)
   const facPlanetRow=p=>{ const made=Object.keys(p.fcount||{}).map(Number).sort((a,b)=>PI.tier[b]-PI.tier[a]);
     const depQty={}; made.forEach(o=>{ const r=PI.recipe[o]; if(!r) return; const u=unitsOnP(p,o); r.in.forEach(([d,q])=>{ d=+d; if(!made.includes(d)) depQty[d]=(depQty[d]||0)+u*(q/(r.out||1)); }); });
@@ -1114,7 +1145,7 @@ function renderLogistics(){ renderNav(); $('resHd').innerHTML='Colony logistics 
     const clickT=leaves.find(o=>tgt.includes(o))??leaves[0]??made[0];
     const crew=p.who?` <span class="hint">· ${p.who}${whoRole[p.whoId]?' ('+whoRole[p.whoId]+')':''}</span>`:'';
     const sysTag=p.sys!==sysL?` <span style="color:var(--amber)">· ${sn(p.sys)}${p.p4outpost?' (P4 outpost)':''}</span>`:'';
-    return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; };
+    return `<tr class="facrow" data-fac="${clickT}" style="border-top:1px solid var(--line);vertical-align:top;cursor:pointer"><td style="padding:4px 10px;color:var(--gold-bright)">${des(p)} · ${PNAME2[p.pcode]||p.pcode}${sysTag} <span class="hint">· ${facTotOf(p)} fac</span>${bufferTxt(p)}${crew}</td><td>${depTxt}</td><td style="color:var(--cyan-bright)">${prodTxt} <span class="hint">▸ layout</span></td></tr>`; };
   const facMulti=[...new Set(facAll.map(p=>String(p.whoId)))].length>1;
   let facRows;
   if(facMulti){ const groups=new Map(); facAll.forEach(p=>{ const k=String(p.whoId); if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(p); });
