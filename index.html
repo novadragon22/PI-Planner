@@ -241,6 +241,7 @@ function codeDistances(fromId, codes, region){ const dist=bfs(fromId);
 // command-center budget [CPU,PG] by Command Center Upgrades level (base from SDE: 1675/6000)
 const CCU_BUDGET={0:[1675,6000],1:[7057,9000],2:[12137,12000],3:[17217,15000],4:[22297,17000],5:[27377,19000]};
 const FAC={basic:{cpu:200,pg:800},adv:{cpu:500,pg:700},htech:{cpu:1100,pg:400},ecu:{cpu:400,pg:2600,headCpu:110,headPg:550},launch:{cpu:3600,pg:700},store:{cpu:500,pg:700}};
+const LINK_RES_CPU=0.96, LINK_RES_PG=0.88; // reserve CPU/PG headroom for planetary LINKS (which also draw grid) so packed planets can actually be wired up in-game
 let skillMap={}; // merged skill_id -> level across logged-in chars
 function skillLvl(id,def){ return skillMap[id]!=null?skillMap[id]:def; }
 // PI skill type IDs (from SDE) -> short label + what they affect, in display order
@@ -282,9 +283,19 @@ function factorySkillsBlockStaged(){
   const ids=Object.keys(chars).filter(id=>charRole[id]==='factory');
   if(!ids.length) return false;
   const u=minStagedUnit(); if(!u.cpu) return false;
-  // staged is impractical for a Factory pilot whose Command Center Upgrades can't fit a self-sufficient staged line,
+  // staged is impractical for a Factory pilot whose Command Center Upgrades can't fit a self-sufficient staged line (incl. link headroom),
   // or is too low (≤2) to consolidate several lines onto one planet (staged's whole advantage). Then single-tier is the sensible build.
-  return ids.some(id=>{ const ccu=(charSkills[id]&&charSkills[id].ccu)||0; const b=CCU_BUDGET[Math.max(0,Math.min(5,ccu))]||CCU_BUDGET[0]; return u.cpu>b[0]||u.pg>b[1]||ccu<=2; });
+  return ids.some(id=>{ const ccu=(charSkills[id]&&charSkills[id].ccu)||0; const b=CCU_BUDGET[Math.max(0,Math.min(5,ccu))]||CCU_BUDGET[0]; return u.cpu>b[0]*LINK_RES_CPU||u.pg>b[1]*LINK_RES_PG||ccu<=2; });
+}
+// automatic decision: use single-tier factories when the toggle is on OR when a staged unit simply cannot fit the available budget (incl. link headroom) — "if staged can't work, build 1 of each tier"
+function stagedFitsBudget(cpuB,pgB){ const u=minStagedUnit(); if(!u.cpu) return true; return u.cpu<=cpuB*LINK_RES_CPU && u.pg<=pgB*LINK_RES_PG; }
+function shouldSingleTier(){
+  if(singleTierFac) return true;
+  const u=minStagedUnit(); if(!u.cpu) return false;
+  const ids=Object.keys(chars).filter(id=>charRole[id]==='factory');
+  if(ids.length) return ids.some(id=>{ const ccu=(charSkills[id]&&charSkills[id].ccu)||0; const b=CCU_BUDGET[Math.max(0,Math.min(5,ccu))]||CCU_BUDGET[0]; return !stagedFitsBudget(b[0],b[1]); });
+  const b=CCU_BUDGET[Math.max(0,Math.min(5,ccuOverride))]||CCU_BUDGET[0];
+  return !stagedFitsBudget(b[0],b[1]);
 }
 function colonyPlan(target,sysId){
   const have=SYS[sysId][5];
@@ -350,7 +361,7 @@ function colonyPlan(target,sysId){
     while(rem.length){ const cw=getCrew?getCrew():{bud:[cpuB0,pgB0],name:null,id:null}; const [cpuB,pgB]=cw.bud;
       const pick=claim(cw.id,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B'));
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
-      while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
+      while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB*LINK_RES_CPU && pg+fc.pg<=pgB*LINK_RES_PG){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
       const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
       planets.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`, sub, who:cw.name, whoId:cw.id, sys:sysId, kind:kind==='adv'?'factory':'basic', pcode:code, ci:pick?pick.ci:null,
@@ -374,7 +385,7 @@ function colonyPlan(target,sysId){
         for(const o of shipped){ if(remaining[o]<=0) continue;
           const nn=Object.assign({},p2need); const d=dem[o]; Object.keys(d).forEach(p=>nn[p]=(nn[p]||0)+d[p]);
           const addFac=1+(p2cnt(nn)-placedP2);
-          if(made.length+addFac<=CAP && cpu+addFac*FAC.adv.cpu<=cpuB && pg+addFac*FAC.adv.pg<=pgB){
+          if(made.length+addFac<=CAP && cpu+addFac*FAC.adv.cpu<=cpuB*LINK_RES_CPU && pg+addFac*FAC.adv.pg<=pgB*LINK_RES_PG){
             made.push(o); cpu+=addFac*FAC.adv.cpu; pg+=addFac*FAC.adv.pg; placedP2=p2cnt(nn); p2need=nn; remaining[o]--; progress=true; } } }
       if(!made.length){ overflow=true; facOver++; break; }
       Object.keys(p2need).forEach(p=>{ const c=Math.ceil(p2need[p]||0); for(let k=0;k<c;k++) made.push(+p); }); // shared feeder facilities (already budgeted)
@@ -395,7 +406,7 @@ function colonyPlan(target,sysId){
       if(!pick){ p4overflow=true; pick={ci:null,code:'B'}; psys=sysId; }
       const outpost = psys!==sysId; if(outpost){ p4outpostInfo=p4outpostInfo||[]; if(!p4outpostInfo.some(o=>o.id===psys)) p4outpostInfo.push({id:psys,jumps}); }
       let cpu=FAC.launch.cpu+FAC.store.cpu, pg=FAC.launch.pg+FAC.store.pg; const made=[];
-      while(rem.length && made.length<CAP){ const o=rem[0]; const fc=PI.tier[o]>=4?FAC.htech:FAC.adv; if(cpu+fc.cpu<=cpuB && pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
+      while(rem.length && made.length<CAP){ const o=rem[0]; const fc=PI.tier[o]>=4?FAC.htech:FAC.adv; if(cpu+fc.cpu<=cpuB*LINK_RES_CPU && pg+fc.pg<=pgB*LINK_RES_PG){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
       const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
       const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
       planets.push({title:`${PNAME2[pick.code]} (factory)${outpost?' · '+SYS[psys][0]+' (P4 outpost)':''}`, sub: outpost?`P4 High-Tech plant — ${SYS[psys][0]} · ${jumps} jump${jumps!==1?'s':''} from main`:'P3 → P4 · High-Tech plant (Barren/Temperate)', who:cw.name, whoId:cw.id, sys:psys, kind:'factory', pcode:pick.code, ci:pick.ci, p4outpost:outpost,
@@ -413,7 +424,7 @@ function colonyPlan(target,sysId){
     const lowFinals=planProds.map(Number).filter(t=>PI.tier[t]>=2);
     if(p4prods.length) packP4(expand(p4prods, p4Finals.length?p4Finals:p4prods), getCrew);                 // High-Tech plants → Barren/Temperate only (with adjacent-system overflow)
     if(lowProds.length){
-      if(singleTierFac){
+      if(shouldSingleTier()){
         // single-tier factory colonies (DalShooth style): each planet makes ONE tier and imports the tier below. Deposit = tier-1, ships = that tier.
         const byT={}; lowProds.forEach(o=>{ (byT[PI.tier[o]]=byT[PI.tier[o]]||[]).push(o); });
         Object.keys(byT).map(Number).sort((a,b)=>b-a).forEach(t=> packFac(expand(byT[t], lowFinals.length?lowFinals:lowProds),'adv',getCrew,null,P4SET));
@@ -431,7 +442,7 @@ function colonyPlan(target,sysId){
     const p0l=[...p0NeedsFor(prod)], p1l=chainTiers(prod).filter(o=>PI.tier[o]==1), advl=chainTiers(prod).filter(o=>PI.tier[o]>=(buyP3?4:2));
     const packL=(rem,kind,restrict,avoid)=>{ const fac=kind==='adv'?FAC.adv:FAC.basic, fname=kind==='adv'?'Advanced':'Basic', sub=kind==='adv'?'P1 → P2 → P3 → P4 in-place':'Import P0 → P1';
       while(rem.length){ const pick=claim(ownerId,restrict,avoid); if(!pick){ overflow=true; if(restrict) p4overflow=true; else facOver++; } const code=pick?pick.code:(restrict?restrict[0]:(POOL[0]?POOL[0].code:'B')); let cpu=FAC.launch.cpu+FAC.store.cpu,pg=FAC.launch.pg+FAC.store.pg; const made=[];
-        while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB&&pg+fc.pg<=pgB){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
+        while(rem.length && made.length<CAP){ const o=rem[0]; const fc=(kind==='adv'&&PI.tier[o]>=4)?FAC.htech:fac; if(cpu+fc.cpu<=cpuB*LINK_RES_CPU&&pg+fc.pg<=pgB*LINK_RES_PG){ made.push(rem.shift()); cpu+=fc.cpu; pg+=fc.pg; } else break; }
         const fcount={}; made.forEach(o=>fcount[o]=(fcount[o]||0)+1);
         const st=addStores(made,cpu,pg,cpuB,pgB); cpu=st.cpu; pg=st.pg;
         res.push({title:`${PNAME2[code]} (${kind==='adv'?'factory':'basic'})`,sub,who:ownerName,whoId:ownerId,sys:sysId,kind:kind==='adv'?'factory':'basic',pcode:code,ci:pick?pick.ci:null,outs:[...new Set(made)],fcount,ins:kind==='adv'?advIns(made):[],fac:`${kind==='adv'?facLine(made):`${made.length}× ${fname} Industry Facility → ${made.map(o=>PI.recipe[o].name).join(', ')}`}${storeLine(st.stores)}`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB});
@@ -439,7 +450,7 @@ function colonyPlan(target,sysId){
     const ownerGet=()=>({bud:[cpuB,pgB],name:ownerName,id:ownerId});
     const packAdvL=()=>{ const p4=advl.filter(o=>PI.tier[o]>=4), low=advl.filter(o=>PI.tier[o]<4);
       if(low.length){
-        if(singleTierFac){ const byT={}; low.forEach(o=>{ (byT[PI.tier[o]]=byT[PI.tier[o]]||[]).push(o); });
+        if(singleTierFac || !stagedFitsBudget(cpuB,pgB)){ const byT={}; low.forEach(o=>{ (byT[PI.tier[o]]=byT[PI.tier[o]]||[]).push(o); });
           Object.keys(byT).map(Number).sort((a,b)=>b-a).forEach(t=> packL(byT[t].slice(),'adv',null,P4SET)); }
         else { // staged: each P3 planet makes its P2 internally (deposit P1, ships P3), feeding the separate P4 plant
           const facAll=consolidate?facBalance([prod]):{};
@@ -455,7 +466,7 @@ function colonyPlan(target,sysId){
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1&&PI.recipe[o].in.some(([x])=>x==p));
         let cpu=FAC.launch.cpu,pg=FAC.launch.pg,ecus=0,heads=0,basics=0;
         const addECU=()=>{ let hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh<1)return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
-        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB*LINK_RES_CPU&&pg+FAC.basic.pg<=pgB*LINK_RES_PG){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
         addECU(); while(addBasic()){}
         if(basics===0) continue;
         res.push({title:`${PNAME2[got.code]}`,sub:'Extraction + P1',who:ownerName,whoId:ownerId,sys:sysId,kind:'extract',pcode:got.code,ci:got.ci,outs:p1?[+p1]:[],ins:[],fcount:p1?{[p1]:basics}:{},fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad${extYield(ownerId)}`,cpu:Math.round(cpu),pg:Math.round(pg),cpuB,pgB}); }
@@ -474,7 +485,7 @@ function colonyPlan(target,sysId){
     note=(buyP0?'Buying raw P0 from the market, but P1 is still made on the extractor planets (Basic facilities are only built where the Extractor Control Unit is). ':'Self-sufficient layout: extractor planets (ECU + heads + Basic facilities) extract P0 and make its P1 on the SAME planet. ')+'Factory planets run Advanced facilities on the P1. Tune extractor heads to your survey rate; links also use CPU/PG.';
     const p1Need = consolidate ? facBalance(planProds.map(Number)) : null; // balanced Basic-facility demand per P1
     // basics-per-planet at a representative extractor budget — used for a stable "planets needed" estimate
-    const bppOf=([cpuB,pgB])=>{ let cpu=FAC.launch.cpu,pg=FAC.launch.pg,b=0,hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh>0){cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu;pg+=FAC.ecu.pg+hh*FAC.ecu.headPg;} while(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;b++;} return Math.max(1,b); };
+    const bppOf=([cpuB,pgB])=>{ let cpu=FAC.launch.cpu,pg=FAC.launch.pg,b=0,hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh>0){cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu;pg+=FAC.ecu.pg+hh*FAC.ecu.headPg;} while(cpu+FAC.basic.cpu<=cpuB*LINK_RES_CPU&&pg+FAC.basic.pg<=pgB*LINK_RES_PG){cpu+=FAC.basic.cpu;pg+=FAC.basic.pg;b++;} return Math.max(1,b); };
     const _repBud=(extractors[0]&&extractors[0].bud)||(fulls[0]&&fulls[0].bud)||[cpuB0,pgB0]; const bpp=bppOf(_repBud);
     if(buildShared){ for(const p of p0){ const codes=(PI.p0pt[p]||[]).filter(c=>have[c]);
       const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
@@ -487,7 +498,7 @@ function colonyPlan(target,sysId){
         // pack this planet to its CPU/PG: Extractor Control Unit(s) + heads, then as many Basic facilities (P1) as fit, before spawning another planet
         let cpu=FAC.launch.cpu, pg=FAC.launch.pg, ecus=0, heads=0, basics=0;
         const addECU=()=>{ let hh=10; while(hh>0 && (cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB || pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB)) hh--; if(hh<1) return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
-        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB && pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB*LINK_RES_CPU && pg+FAC.basic.pg<=pgB*LINK_RES_PG){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
         addECU();
         while((want==null || basics<want) && addBasic()){}
         // still want more P1 and grid left → add another extractor (+heads) and keep filling basics
@@ -517,7 +528,7 @@ function colonyPlan(target,sysId){
         const p1=Object.keys(PI.recipe).find(o=>PI.tier[o]==1 && PI.recipe[o].in.some(([x])=>x==p));
         let cpu=FAC.launch.cpu, pg=FAC.launch.pg, ecus=0, heads=0, basics=0;
         const addECU=()=>{ let hh=10; while(hh>0&&(cpu+FAC.ecu.cpu+hh*FAC.ecu.headCpu>cpuB||pg+FAC.ecu.pg+hh*FAC.ecu.headPg>pgB))hh--; if(hh<1)return false; cpu+=FAC.ecu.cpu+hh*FAC.ecu.headCpu; pg+=FAC.ecu.pg+hh*FAC.ecu.headPg; ecus++; heads+=hh; return true; };
-        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB&&pg+FAC.basic.pg<=pgB){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
+        const addBasic=()=>{ if(cpu+FAC.basic.cpu<=cpuB*LINK_RES_CPU&&pg+FAC.basic.pg<=pgB*LINK_RES_PG){ cpu+=FAC.basic.cpu; pg+=FAC.basic.pg; basics++; return true; } return false; };
         addECU(); while(addBasic()){}
         planets.push({title:`${PNAME2[pick]} · ${SYS[fsug.id][0]} (feeder)`, sub:`Feeder colony — ${SYS[fsug.id][0]} · ${fsug.jumps} jump${fsug.jumps!==1?'s':''} from main`, who:cw.name, whoId:cw.id, feeder:true, sys:fsug.id, kind:'feeder', pcode:pick, outs:p1?[+p1]:[], ins:[], fcount:p1?{[p1]:basics}:{},
           fac:`${ecus>1?ecus+'× ':''}Extractor Control Unit · ${heads} head${heads!==1?'s':''} → extract <b>${PI.names[p]}</b><br>${basics}× Basic Industry Facility → <b>${p1?PI.recipe[p1].name:'P1'}</b><br>1× Launchpad${extYield(cw.id)}`,
