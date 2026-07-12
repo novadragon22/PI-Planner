@@ -18,6 +18,22 @@
   ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:#05080b}::-webkit-scrollbar-thumb{background:#1c2731;border:1px solid #243441}
   .diamond{width:7px;height:7px;background:var(--gold);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:inline-block;margin-right:8px;vertical-align:middle}
   .mono{font-family:var(--mono)}
+  /* ---- advisor table polish ---- */
+  body.cb{--green:#4aa3e0;--red:#e07b28;--amber:#e0b020;--cyan:#5ec8d8}
+  #mkBody table thead th{position:sticky;top:0;background:#0b1116;z-index:2;cursor:pointer;user-select:none;white-space:nowrap}
+  #mkBody table thead th:hover{color:var(--gold-bright)}
+  #mkBody table tbody tr.row:nth-child(odd){background:rgba(255,255,255,.018)}
+  #mkBody table tbody tr.row:hover{background:rgba(122,184,200,.09)}
+  #mkBody td.heat{position:relative}
+  #mkBody .heatfill{position:absolute;left:0;top:3px;bottom:3px;border-radius:2px;opacity:.18;pointer-events:none}
+  #mkBody .expander{cursor:pointer;color:var(--muted);display:inline-block;width:12px;user-select:none}
+  #mkBody .expander:hover{color:var(--cyan)}
+  .ptchip{cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:11px;border:1px solid var(--line2);font-size:10px;font-family:var(--mono);color:var(--muted)}
+  .ptchip:hover{border-color:var(--gold-dim)}
+  .ptchip.on{border-color:var(--gold-dim);background:rgba(201,168,104,.14);color:var(--text)}
+  .ptdot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .chaintree{padding:8px 14px 12px;font-family:var(--mono);font-size:11px;background:rgba(255,255,255,.015);border-left:2px solid var(--line2)}
+  .chaintree .node{padding:1px 0;white-space:nowrap}
   .app{display:flex;flex-direction:column;height:100%;width:100%}
   .topbar{display:flex;align-items:center;gap:16px;padding:11px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#080b0e,#06090c)}
   .brand{font-family:var(--mono);font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold-bright);white-space:nowrap}
@@ -1483,6 +1499,23 @@ async function renderMine(){ renderNav(); $('resHd').innerHTML='My colonies <spa
 
 // ---------- What should I make? (rank products by profit) ----------
 let makeTier=4;
+let mkSort={key:'perHrFac',dir:-1};        // sortable columns
+let mkPTFilter=new Set();                    // planet-type chip filter (empty = all)
+let mkChain=null;                            // pid whose P0→P4 chain diagram is expanded
+let cbPalette=localStorage.getItem('pi_cb')==='1';
+try{ document.body.classList.toggle('cb',cbPalette); }catch(e){}
+// compact P0→P4 recipe tree for one unit of a product
+function chainTreeHtml(o){
+  const tcol=['#9fb0bc','#7ab8c8','#8cc86a','#d8a24a','#e8d296'];
+  let h='';
+  (function walk(t,qty,depth){
+    const r=PI.recipe[t]; const tier=PI.tier[t]||0; const nm=(r&&r.name)||PI.names[t]||('type '+t);
+    const q=Math.round(qty).toLocaleString();
+    h+=`<div class="node" style="padding-left:${depth*18}px"><span style="color:${tcol[tier]||'#9fb0bc'};font-weight:600">P${tier}</span> ${depth?'└ ':''}${nm} <span class="hint">×${q}${r?'':' <span style="color:var(--muted2)">(raw)</span>'}</span></div>`;
+    if(r){ const cyc=Math.ceil(qty/r.out); r.in.forEach(([x,qq])=>walk(String(x),cyc*qq,depth+1)); }
+  })(String(o),1,0);
+  return h;
+}
 let makeMineOnly=localStorage.getItem('pi_mkmine')==='1';
 // reverse map planet-type name -> single-letter code (Temperate->T, Shattered->H, etc.)
 const PT_NAME2CODE=(()=>{ const m={}; for(const c in UNIVERSE.planetTypes) m[UNIVERSE.planetTypes[c].toLowerCase()]=c; return m; })();
@@ -1517,6 +1550,17 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
   $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap" class="hint">Tier ${tierSel} · Hub ${hubSel} · <label style="cursor:pointer"><input type="checkbox" id="mkP0" ${buyP0?'checked':''}> Buy P0</label> <label style="cursor:pointer"><input type="checkbox" id="mkP1" ${buyP1?'checked':''}> Buy P1</label> · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''} · ${mineCtl}</div>
     <div class="hint" style="padding:0 14px 6px">Cost basis: <b style="color:var(--gold-bright)">${basisLbl}</b> · revenue net of fees (<b style="color:var(--amber)">${(fees.total*100).toFixed(2)}%</b> · ${feeSrc}) selling via ${sellMode==='sell'?'sell orders':'buy orders'} at ${hubName(buyHub)}. Ranked by profit per facility-hour; pre build-time.</div>
     <div id="mkBody"></div></td></tr>`;
+  // planet-type filter chips + legend + colorblind toggle, injected under the controls
+  const chipRow=`<div style="padding:2px 14px 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span class="hint" style="color:var(--muted2)">Planet filter:</span>
+    ${Object.keys(UNIVERSE.planetTypes).map(c=>`<span class="ptchip ${mkPTFilter.has(c)?'on':''}" data-pt="${c}" title="${UNIVERSE.planetTypes[c]} — filter to products sourceable from selected planets"><i class="ptdot" style="background:${PT_COLOR[c]||'#888'}"></i>${c}</span>`).join('')}
+    ${mkPTFilter.size?`<span class="ptchip" id="mkPTclear" style="color:var(--cyan)">✕ clear</span>`:''}
+    <label style="cursor:pointer;margin-left:auto" class="hint" title="Switch profit/loss colors to a color-blind-safe blue/orange palette"><input type="checkbox" id="mkCB" ${cbPalette?'checked':''}> Color-blind palette</label>
+  </div>`;
+  $('mkBody').insertAdjacentHTML('beforebegin', chipRow);
+  $('resBody').querySelectorAll('.ptchip[data-pt]').forEach(ch=>ch.onclick=()=>{ const c=ch.dataset.pt; mkPTFilter.has(c)?mkPTFilter.delete(c):mkPTFilter.add(c); renderMake(); });
+  { const el=$('mkPTclear'); if(el) el.onclick=()=>{ mkPTFilter.clear(); renderMake(); }; }
+  { const el=$('mkCB'); if(el) el.onchange=e=>{ cbPalette=e.target.checked; localStorage.setItem('pi_cb',cbPalette?'1':'0'); document.body.classList.toggle('cb',cbPalette); renderMake(); }; }
   $('mkTier').onchange=e=>{ makeTier=+e.target.value; renderMake(); };
   $('mkHub').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderMake(); };
   $('mkP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderMake(); };
@@ -1524,27 +1568,46 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
   { const el=$('mkMine'); if(el) el.onchange=e=>{ makeMineOnly=e.target.checked; localStorage.setItem('pi_mkmine',makeMineOnly?'1':'0'); renderMake(); }; }
   $('mkReload').onclick=async()=>{ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); };
   // compute rows — input cost follows the selected buy strategy
-  const rows=prods.map(o=>{ const e=unitEconomics(o,buyHub); if(!e) return {o,na:true};
+  let rows=prods.map(o=>{ const e=unitEconomics(o,buyHub); if(!e) return {o,na:true};
     const rev=e.rev*feeMul; // net of market fees
     const inCost = basis==='P1'?e.costP1 : basis==='P0'?e.costP0 : 0;
     const profitRun = (inCost!=null)? rev-inCost : null;
     const perHrFac = profitRun!=null ? profitRun*(3600/e.ct) : null; // one facility: out per ct
     const margin = (inCost!=null && rev>0)? (rev-inCost)/rev : null;
     const cover = selfSourceable(o,myPT);
-    return {o,profitRun,perHrFac,margin,rev,inCost,cover}; })
-    .filter(r=>!(makeMineOnly&&havePT&&r.cover===false))
-    .sort((a,b)=> (b.perHrFac??-1e30)-(a.perHrFac??-1e30));
-  const body = rows.map(r=>{ if(r.na) return '';
+    const outN=PI.recipe[o].out;
+    return {o,profitRun,perHrFac,margin,rev,inCost,cover,revU:rev?rev/outN:null,inU:inCost!=null?inCost/outN:null}; })
+    .filter(r=>!r.na);
+  // planet chip filter → keep products every raw of which is sourceable from a selected planet type
+  if(mkPTFilter.size) rows=rows.filter(r=>{ const c=bom(r.o,1); return Object.keys(c).filter(t=>PI.p0pt[t]).every(t=>PI.p0pt[t].some(code=>mkPTFilter.has(code))); });
+  // my-planets filter
+  rows=rows.filter(r=>!(makeMineOnly&&havePT&&r.cover===false));
+  // sort
+  const kf={ name:r=>PI.recipe[r.o].name, cover:r=>r.cover===true?2:r.cover===false?0:1,
+    rev:r=>r.revU??-1e30, inCost:r=>r.inU??1e30, perHrFac:r=>r.perHrFac??-1e30, margin:r=>r.margin??-1e30 }[mkSort.key]||(r=>r.perHrFac??-1e30);
+  rows.sort((a,b)=>{ const va=kf(a),vb=kf(b); if(typeof va==='string') return mkSort.dir*va.localeCompare(vb); return mkSort.dir*((va>vb)?1:(va<vb)?-1:0); });
+  const maxHeat=Math.max(1,...rows.map(r=>Math.abs(r.perHrFac)||0));
+  const body = rows.map(r=>{
     const pf=r.perHrFac; const col=pf==null?'var(--muted2)':(pf>=0?'var(--green)':'var(--red)');
     const need=[...prodPlanetTypes(r.o)].sort().map(c=>`<span title="${UNIVERSE.planetTypes[c]}" style="display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;border-radius:2px;font-size:8.5px;font-weight:700;color:#0a0d10;background:${PT_COLOR[c]||'#888'};opacity:${(!havePT||myPT.has(c))?1:.28}">${c}</span>`).join(' ');
     const flag=r.cover==null?'':(r.cover?'<span title="You have a planet type for every raw in this chain" style="color:var(--green)">✓</span> ':'<span title="Missing a planet type for part of this chain" style="color:var(--muted2)">✗</span> ');
-    return `<tr class="row" data-o="${r.o}"><td style="padding:4px 14px">${PI.recipe[r.o].name}</td>
+    const w=pf!=null?Math.round(Math.abs(pf)/maxHeat*100):0;
+    const heat=pf!=null?`<span class="heatfill" style="width:${w}%;background:${pf>=0?'var(--green)':'var(--red)'}"></span>`:'';
+    const open=mkChain===r.o;
+    const exp=`<span class="expander" data-x="${r.o}" title="show recipe chain">${open?'▾':'▸'}</span> `;
+    let tr=`<tr class="row" data-o="${r.o}"><td style="padding:4px 14px">${exp}${PI.recipe[r.o].name}</td>
       <td style="padding:4px 8px;white-space:nowrap">${flag}${need}</td>
-      <td class="r mono" style="color:var(--cyan)">${r.rev?fmtIsk(r.rev/PI.recipe[r.o].out):'—'}</td>
-      <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inCost/PI.recipe[r.o].out):(basis==='extract'?'0':'—')}</td>
-      <td class="r mono" style="color:${col};font-weight:600">${pf!=null?fmtIsk(pf):'—'}</td>
-      <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`; }).join('');
-  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th style="text-align:left;padding:0 8px">planets</th><th>sell/unit</th><th>${inHdr}</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
+      <td class="r mono" style="color:var(--cyan)">${r.rev?fmtIsk(r.revU):'—'}</td>
+      <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inU):(basis==='extract'?'0':'—')}</td>
+      <td class="r mono heat" style="color:${col};font-weight:600">${heat}<span style="position:relative">${pf!=null?fmtIsk(pf):'—'}</span></td>
+      <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`;
+    if(open) tr+=`<tr class="chainrow"><td colspan="6" style="padding:0"><div class="chaintree">${chainTreeHtml(r.o)}</div></td></tr>`;
+    return tr; }).join('');
+  const arrow=k=>mkSort.key===k?(mkSort.dir<0?' ▾':' ▴'):'';
+  const th=(k,lbl,left)=>`<th data-sort="${k}" style="${left?'text-align:left;padding:0 14px':'padding:0 8px'}">${lbl}${arrow(k)}</th>`;
+  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint">${th('name','product',1)}${th('cover','planets',1)}${th('rev','sell/unit')}${th('inCost',inHdr)}${th('perHrFac','ISK/fac·hr')}${th('margin','margin')}</tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
+  $('mkBody').querySelectorAll('thead th').forEach(h=>h.onclick=()=>{ const k=h.dataset.sort; if(mkSort.key===k) mkSort.dir*=-1; else mkSort={key:k,dir:(k==='name'?1:-1)}; renderMake(); });
+  $('mkBody').querySelectorAll('.expander').forEach(x=>x.onclick=(e)=>{ e.stopPropagation(); mkChain=mkChain===x.dataset.x?null:x.dataset.x; renderMake(); });
   $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; saveSettings(); buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
   if(!haveAll && !pricesLoading){ /* auto-load once */ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); }
 }
