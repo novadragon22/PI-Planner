@@ -1483,6 +1483,15 @@ async function renderMine(){ renderNav(); $('resHd').innerHTML='My colonies <spa
 
 // ---------- What should I make? (rank products by profit) ----------
 let makeTier=4;
+let makeMineOnly=localStorage.getItem('pi_mkmine')==='1';
+// reverse map planet-type name -> single-letter code (Temperate->T, Shattered->H, etc.)
+const PT_NAME2CODE=(()=>{ const m={}; for(const c in UNIVERSE.planetTypes) m[UNIVERSE.planetTypes[c].toLowerCase()]=c; return m; })();
+// planet-type codes able to source every P0 in a product's chain (union, for display)
+function prodPlanetTypes(o){ const c=bom(o,1), codes=new Set(); Object.keys(c).forEach(t=>{ const pt=PI.p0pt[t]; if(pt) pt.forEach(x=>codes.add(x)); }); return codes; }
+// planet-type codes present across the logged-in characters' live colonies
+function myPlanetTypes(){ const s=new Set(); Object.keys(colonies||{}).forEach(id=>(colonies[id]||[]).forEach(c=>{ const code=c&&c.type?PT_NAME2CODE[String(c.type).toLowerCase()]:null; if(code) s.add(code); })); return s; }
+// true if, for every P0 in the chain, you have a planet type that yields it; null if no colonies known
+function selfSourceable(o, myPT){ if(!myPT||!myPT.size) return null; const c=bom(o,1); const p0s=Object.keys(c).filter(t=>PI.p0pt[t]); return p0s.every(t=>PI.p0pt[t].some(code=>myPT.has(code))); }
 function unitEconomics(prod, st){ // returns {rev, costP1, costP0, out, ct} per single craft run, using prices at st
   const r=PI.recipe[prod]; if(!r) return null; const p=px(st,prod); if(!p) return null;
   const consume=bom(prod, r.out);
@@ -1502,13 +1511,17 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
   const inHdr = basis==='P1'?'P1 cost/unit':basis==='P0'?'P0 cost/unit':'inputs/unit';
   const fees=feeRates(); const feeMul=1-fees.total;
   const feeSrc=fees.who?`${fees.who} · Acct ${fees.acc}/Broker ${fees.br}`:'base rates';
-  $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap" class="hint">Tier ${tierSel} · Hub ${hubSel} · <label style="cursor:pointer"><input type="checkbox" id="mkP0" ${buyP0?'checked':''}> Buy P0</label> <label style="cursor:pointer"><input type="checkbox" id="mkP1" ${buyP1?'checked':''}> Buy P1</label> · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''}</div>
+  const myPT=myPlanetTypes(); const havePT=myPT.size>0;
+  const ptBadges=havePT?[...myPT].sort().map(c=>`<span title="${UNIVERSE.planetTypes[c]}" style="display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:3px;font-size:9px;font-weight:700;color:#0a0d10;background:${PT_COLOR[c]||'#888'}">${c}</span>`).join(' '):'';
+  const mineCtl=havePT?`<label style="cursor:pointer" title="Only show products every raw of which you can extract from a planet type you already have a colony on"><input type="checkbox" id="mkMine" ${makeMineOnly?'checked':''}> Only my planets</label> <span class="hint">(${ptBadges})</span>`:`<span class="hint" style="color:var(--muted2)">Log in to flag products your planets can self-source</span>`;
+  $('resBody').innerHTML=`<tr><td><div style="padding:8px 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap" class="hint">Tier ${tierSel} · Hub ${hubSel} · <label style="cursor:pointer"><input type="checkbox" id="mkP0" ${buyP0?'checked':''}> Buy P0</label> <label style="cursor:pointer"><input type="checkbox" id="mkP1" ${buyP1?'checked':''}> Buy P1</label> · <span id="mkReload" style="cursor:pointer;color:var(--cyan)">↻ load prices</span> ${pricesLoading?'<span>pricing…</span>':''} · ${mineCtl}</div>
     <div class="hint" style="padding:0 14px 6px">Cost basis: <b style="color:var(--gold-bright)">${basisLbl}</b> · revenue net of fees (<b style="color:var(--amber)">${(fees.total*100).toFixed(2)}%</b> · ${feeSrc}) selling via ${sellMode==='sell'?'sell orders':'buy orders'} at ${hubName(buyHub)}. Ranked by profit per facility-hour; pre build-time.</div>
     <div id="mkBody"></div></td></tr>`;
   $('mkTier').onchange=e=>{ makeTier=+e.target.value; renderMake(); };
   $('mkHub').onchange=e=>{ buyHub=+e.target.value; localStorage.setItem('pi_hub',buyHub); renderMake(); };
   $('mkP0').onchange=e=>{ buyP0=e.target.checked; localStorage.setItem('pi_bp0',buyP0?'1':'0'); renderMake(); };
   $('mkP1').onchange=e=>{ buyP1=e.target.checked; localStorage.setItem('pi_bp1',buyP1?'1':'0'); renderMake(); };
+  { const el=$('mkMine'); if(el) el.onchange=e=>{ makeMineOnly=e.target.checked; localStorage.setItem('pi_mkmine',makeMineOnly?'1':'0'); renderMake(); }; }
   $('mkReload').onclick=async()=>{ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); };
   // compute rows — input cost follows the selected buy strategy
   const rows=prods.map(o=>{ const e=unitEconomics(o,buyHub); if(!e) return {o,na:true};
@@ -1517,16 +1530,21 @@ async function renderMake(){ renderNav(); $('resHd').innerHTML='What should I ma
     const profitRun = (inCost!=null)? rev-inCost : null;
     const perHrFac = profitRun!=null ? profitRun*(3600/e.ct) : null; // one facility: out per ct
     const margin = (inCost!=null && rev>0)? (rev-inCost)/rev : null;
-    return {o,profitRun,perHrFac,margin,rev,inCost}; })
+    const cover = selfSourceable(o,myPT);
+    return {o,profitRun,perHrFac,margin,rev,inCost,cover}; })
+    .filter(r=>!(makeMineOnly&&havePT&&r.cover===false))
     .sort((a,b)=> (b.perHrFac??-1e30)-(a.perHrFac??-1e30));
   const body = rows.map(r=>{ if(r.na) return '';
     const pf=r.perHrFac; const col=pf==null?'var(--muted2)':(pf>=0?'var(--green)':'var(--red)');
+    const need=[...prodPlanetTypes(r.o)].sort().map(c=>`<span title="${UNIVERSE.planetTypes[c]}" style="display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;border-radius:2px;font-size:8.5px;font-weight:700;color:#0a0d10;background:${PT_COLOR[c]||'#888'};opacity:${(!havePT||myPT.has(c))?1:.28}">${c}</span>`).join(' ');
+    const flag=r.cover==null?'':(r.cover?'<span title="You have a planet type for every raw in this chain" style="color:var(--green)">✓</span> ':'<span title="Missing a planet type for part of this chain" style="color:var(--muted2)">✗</span> ');
     return `<tr class="row" data-o="${r.o}"><td style="padding:4px 14px">${PI.recipe[r.o].name}</td>
+      <td style="padding:4px 8px;white-space:nowrap">${flag}${need}</td>
       <td class="r mono" style="color:var(--cyan)">${r.rev?fmtIsk(r.rev/PI.recipe[r.o].out):'—'}</td>
       <td class="r mono" style="color:var(--muted)">${r.inCost!=null?fmtIsk(r.inCost/PI.recipe[r.o].out):(basis==='extract'?'0':'—')}</td>
       <td class="r mono" style="color:${col};font-weight:600">${pf!=null?fmtIsk(pf):'—'}</td>
       <td class="r mono" style="color:${r.margin!=null?(r.margin>=0?'var(--green)':'var(--red)'):'var(--muted2)'}">${r.margin!=null?(r.margin*100).toFixed(0)+'%':'—'}</td></tr>`; }).join('');
-  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th>sell/unit</th><th>${inHdr}</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
+  $('mkBody').innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr class="hint" style="text-align:right"><th style="text-align:left;padding:0 14px">product</th><th style="text-align:left;padding:0 8px">planets</th><th>sell/unit</th><th>${inHdr}</th><th>ISK/fac·hr</th><th>margin</th></tr></thead><tbody>${body||`<tr><td class="hint" style="padding:10px 14px">Click “load prices” to rank ${prods.length} P${makeTier} products.</td></tr>`}</tbody></table>`;
   $('mkBody').querySelectorAll('.row').forEach(tr=>tr.onclick=()=>{ const o=tr.dataset.o; if(sel[o]==null){ sel[o]=lastQty; saveSel(); } target=o; tier=PI.tier[o]; saveSettings(); buildTiers(); buildProducts(); renderReq(); compute(); loadHubPrices(); });
   if(!haveAll && !pricesLoading){ /* auto-load once */ pricesLoading=true; renderMake(); await fetchPrices(buyHub,[...idset]); pricesLoading=false; renderMake(); }
 }
